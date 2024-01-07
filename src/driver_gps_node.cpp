@@ -115,9 +115,9 @@ void wheel_tick_received(const xbot_msgs::WheelTick::ConstPtr &msg) {
     // drop if not ubx
     if(!isUbxInterface)
         return;
-    ((UbxGpsInterface*)gpsInterface)->send_wheel_ticks(static_cast<uint32_t>(msg->stamp.toNSec() / 1000000), msg->wheel_direction_rl,
-                                  msg->wheel_ticks_rl / 10,
-                                  msg->wheel_direction_rr, msg->wheel_ticks_rr / 10);
+    ((UbxGpsInterface*)gpsInterface)->send_wheel_ticks(static_cast<uint32_t>(msg->stamp.toNSec() / 1000000), 
+                                  msg->wheel_direction_rl, (uint32_t)(msg->wheel_pos_rl * msg->wheel_pos_to_tick_factor),
+                                  msg->wheel_direction_rr, (uint32_t)(msg->wheel_pos_rr * msg->wheel_pos_to_tick_factor));
     last_wheel_tick_time = msg->stamp;
 }
 
