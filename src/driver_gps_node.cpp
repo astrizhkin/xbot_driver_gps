@@ -99,8 +99,14 @@ void gps_log(std::string text, GpsInterface::Level level) {
         case GpsInterface::Level::INFO:
             ROS_INFO_STREAM("[driver_gps] " << text);
             break;
+        case GpsInterface::Level::INFO_THROTTLE:
+            ROS_INFO_STREAM_THROTTLE(5,"[driver_gps] " << text);
+            break;
         case GpsInterface::Level::WARN:
             ROS_WARN_STREAM("[driver_gps] " << text);
+            break;
+        case GpsInterface::Level::WARN_THROTTLE:
+            ROS_WARN_STREAM_THROTTLE(5,"[driver_gps] " << text);
             break;
         default:
             ROS_ERROR_STREAM("[driver_gps] " << text);

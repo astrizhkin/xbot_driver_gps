@@ -33,7 +33,7 @@ xbot::driver::gps::NmeaGpsInterface::NmeaGpsInterface() : GpsInterface(), gps(pa
 
         if(fix.type != 2 && fix.type != 3) {
             gps_state_valid_ = false;
-            log(std::string("invalid gnssFix - dropping message. fix was: ") + std::to_string(fix.type), WARN);
+            log(std::string("invalid gnssFix - dropping message. fix was: ") + std::to_string(fix.type), WARN_THROTTLE);
             return;
         }
 

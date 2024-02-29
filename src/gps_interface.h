@@ -85,7 +85,9 @@ namespace xbot {
                 enum Level {
                     VERBOSE,
                     INFO,
+                    INFO_THROTTLE,
                     WARN,
+                    WARN_THROTTLE,
                     ERROR
                 };
 
