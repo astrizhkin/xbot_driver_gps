@@ -23,8 +23,8 @@ ExternalProject_Add(
         ${EP_NEMATODE}
 
         PREFIX ${EP_NEMATODE}
-        GIT_REPOSITORY https://github.com/ClemensElflein/NemaTode
-        GIT_TAG b9ea99be965167a67c6e238336de15304cdb8002
+        GIT_REPOSITORY https://github.com/astrizhkin/NemaTode
+        GIT_TAG d061b62bacd201a89494a16702d53014c5b4f6e1
         GIT_SHALLOW OFF
 
         BUILD_ALWAYS OFF
