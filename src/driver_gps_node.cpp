@@ -235,21 +235,21 @@ int main(int argc, char **argv) {
     ros::NodeHandle n;
     ros::NodeHandle paramNh("~");
 
+    allow_verbose_logging = paramNh.param("verbose", false);
+    if (allow_verbose_logging) {
+        ROS_WARN("GPS node has verbose logging enabled");
+    }
+
     isUbxInterface = paramNh.param("ubx_mode", true);
     if(isUbxInterface) {
         ROS_INFO_STREAM("Using UBX mode for GPS");
         gpsInterface = new UbxGpsInterface();
     } else {
         ROS_INFO_STREAM("Using NMEA mode for GPS");
-        gpsInterface = new NmeaGpsInterface();
+        gpsInterface = new NmeaGpsInterface(allow_verbose_logging);
     }
 
     gpsInterface->set_log_function(gps_log);
-
-    allow_verbose_logging = paramNh.param("verbose", false);
-    if (allow_verbose_logging) {
-        ROS_WARN("GPS node has verbose logging enabled");
-    }
 
     if(paramNh.param("read_from_file", false)) {
         ROS_INFO_STREAM("Reading GPS data from file!");

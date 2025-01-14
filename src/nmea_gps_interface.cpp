@@ -27,9 +27,9 @@ size_t xbot::driver::gps::NmeaGpsInterface::parse_rx_buffer() {
     return 1;
 }
 
-xbot::driver::gps::NmeaGpsInterface::NmeaGpsInterface() : GpsInterface(), gps(parser) {
+xbot::driver::gps::NmeaGpsInterface::NmeaGpsInterface(bool enableLogging) : GpsInterface(), gps(parser) {
     //enable/disable NMEA parser logging
-    //parser.log = true;
+    parser.log = enableLogging;
     
     gps.onUpdate += [this]() {
         auto &fix = this->gps.fix;
