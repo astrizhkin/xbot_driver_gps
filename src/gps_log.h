@@ -11,7 +11,9 @@ namespace xbot {
           enum LogLevel {
               VERBOSE,
               INFO,
+              INFO_THROTTLE,
               WARN,
+              WARN_THROTTLE,
               ERROR
           };
 

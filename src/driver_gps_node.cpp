@@ -101,13 +101,13 @@ void gps_log(std::string text, LogLevel level) {
         case INFO:
             ROS_INFO_STREAM("[driver_gps] " << text);
             break;
-        case GpsInterface::Level::INFO_THROTTLE:
+        case INFO_THROTTLE:
             ROS_INFO_STREAM_THROTTLE(5,"[driver_gps] " << text);
             break;
-        case GpsInterface::Level::WARN:
+        case WARN:
             ROS_WARN_STREAM("[driver_gps] " << text);
             break;
-        case GpsInterface::Level::WARN_THROTTLE:
+        case WARN_THROTTLE:
             ROS_WARN_STREAM_THROTTLE(5,"[driver_gps] " << text);
             break;
         default:
