@@ -17,9 +17,9 @@ size_t xbot::driver::gps::NmeaGpsInterface::parse_rx_buffer() {
             try {
                 parser.readByte(rx_buffer_[i]);
             } catch (nmea::NMEAParseError &e) {
-                log(std::string("NMEA parse exception. message: ")+e.message + ", sentence: " + e.nmea.text, Level::WARN);
+                log(std::string("NMEA parse exception. message: ")+e.message + ", sentence: " + e.nmea.text, WARN);
             } catch (std::exception &e) {
-                log(std::string("NMEA parse exception: ")+e.what(), Level::WARN);
+                log(std::string("NMEA parse exception: ")+e.what(), WARN);
             }
         }
         rx_buffer_.erase(rx_buffer_.begin(), rx_buffer_.begin() + size);
@@ -81,8 +81,7 @@ xbot::driver::gps::NmeaGpsInterface::NmeaGpsInterface(bool verboseLogging) : Gps
         gps_state_.pos_n = n - datum_n_;
         gps_state_.pos_u = fix.altitude - datum_u_;
 
-        gps_state_.position_accuracy = (double) sqrt(
-                pow(fix.horizontalAccuracy(), 2) + pow(fix.verticalAccuracy(), 2));
+        gps_state_.position_accuracy = fix.horizontalAccuracy();
 
         // speed in m/s
         double speed = fix.speed / 3.6;

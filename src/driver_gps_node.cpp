@@ -4,8 +4,10 @@
 //
 
 #include "ros/ros.h"
-#include "ublox_gps_interface.h"
-#include "nmea_gps_interface.h"
+#include "devices/serial_gps_device.h"
+#include "devices/tcp_gps_device.h"
+#include "interfaces/ublox_gps_interface.h"
+#include "interfaces/nmea_gps_interface.h"
 #include "xbot_msgs/WheelTick.h"
 #include "geometry_msgs/PoseWithCovariance.h"
 #include "xbot_msgs/AbsolutePose.h"
@@ -88,24 +90,24 @@ void generate_nmea(double lat_in, double lon_in) {
     vrs_nmea_pub.publish(vrs_msg);
 }
 
-void gps_log(std::string text, GpsInterface::Level level) {
+void gps_log(std::string text, LogLevel level) {
     switch (level) {
-        case GpsInterface::Level::VERBOSE:
+        case VERBOSE:
             if (!allow_verbose_logging) {
                 return;
             }
             ROS_INFO_STREAM("[driver_gps] " << text);
             break;
-        case GpsInterface::Level::INFO:
+        case INFO:
             ROS_INFO_STREAM("[driver_gps] " << text);
             break;
-        case GpsInterface::Level::INFO_THROTTLE:
+        case INFO_THROTTLE:
             ROS_INFO_STREAM_THROTTLE(5,"[driver_gps] " << text);
             break;
-        case GpsInterface::Level::WARN:
+        case WARN:
             ROS_WARN_STREAM("[driver_gps] " << text);
             break;
-        case GpsInterface::Level::WARN_THROTTLE:
+        case WARN_THROTTLE:
             ROS_WARN_STREAM_THROTTLE(5,"[driver_gps] " << text);
             break;
         default:
@@ -251,12 +253,23 @@ int main(int argc, char **argv) {
 
     gpsInterface->set_log_function(gps_log);
 
-    if(paramNh.param("read_from_file", false)) {
+    std::string device_type = paramNh.param("device_type", std::string("serial"));
+    if (device_type == "serial") {
+        SerialGpsDevice *device = new SerialGpsDevice();
+        device->set_baudrate(paramNh.param("baudrate", 38400));
+        device->set_serial_port(paramNh.param("serial_port", std::string("/dev/ttyACM0")));
+        gpsInterface->set_device(device);
+    } else if (device_type == "tcp") {
+        TcpGpsDevice *device = new TcpGpsDevice();
+        device->set_host(paramNh.param("tcp_host", std::string("")));
+        device->set_port(paramNh.param("tcp_port", std::string("")));
+        gpsInterface->set_device(device);
+    } else if (device_type == "file") {
         ROS_INFO_STREAM("Reading GPS data from file!");
         gpsInterface->set_file_name(paramNh.param("filename", std::string("/dev/null")));
     } else {
-        gpsInterface->set_baudrate(paramNh.param("baudrate", 38400));
-        gpsInterface->set_serial_port(paramNh.param("serial_port", std::string("/dev/ttyACM0")));
+        ROS_ERROR_STREAM("Invalid device type");
+        return 2;
     }
 
     std::string mode = paramNh.param("mode", std::string("absolute"));
