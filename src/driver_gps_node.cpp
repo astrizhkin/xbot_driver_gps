@@ -23,6 +23,8 @@
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/date_time/posix_time/posix_time_io.hpp>
 
+#include <rosgraph_msgs/Log.h>
+
 using namespace xbot::driver::gps;
 using namespace nmea;
 
@@ -46,6 +48,8 @@ sensor_msgs::Imu imu_msg;
 ros::Time last_wheel_tick_time(0.0);
 ros::Time last_vrs_feedback(0.0);
 nmea_msgs::Sentence vrs_msg;
+
+uint8_t radio_log_levels = 0;
 
 void generate_nmea(double lat_in, double lon_in) {
     // only send every 10 seconds, this will be more than needed
@@ -131,6 +135,14 @@ void wheel_tick_received(const xbot_msgs::WheelTick::ConstPtr &msg) {
 
 void rtcm_received(const rtcm_msgs::Message::ConstPtr &rtcm) {
     gpsInterface->send_rtcm(rtcm->message.data(), rtcm->message.size());
+}
+
+void log_received(const rosgraph_msgs::Log::ConstPtr &msg) {
+    if (radio_log_levels & msg->level) {
+        ROS_INFO_STREAM("Sending radio message [" << msg->msg << "]");
+        const uint8_t *chars = (const uint8_t *)msg->msg.data();
+        gpsInterface->send_rtcm(chars, msg->msg.length());
+    }
 }
 
 void convert_gps_result(const GpsInterface::GpsState &state, xbot_msgs::AbsolutePose &result) {
@@ -229,6 +241,33 @@ imu_received(const GpsInterface::ImuState &state) {
     imu_pub.publish(imu_msg);
 }
 
+uint8_t
+read_config_levels(std::string& levels_string) {
+    uint8_t levels = 0;
+
+    std::stringstream ss(levels_string);
+
+    while( ss.good() ) {
+        std::string level;
+        getline( ss, level, ',' );
+        if (level == "DEBUG") {
+            levels |= rosgraph_msgs::Log::DEBUG;
+        } else if (level == "INFO") {
+            levels |= rosgraph_msgs::Log::INFO;
+        } else if (level == "WARN") {
+            levels |= rosgraph_msgs::Log::WARN;
+        } else if (level == "ERROR") {
+            levels |= rosgraph_msgs::Log::ERROR;
+        } else if (level == "FATAL") {
+            levels |= rosgraph_msgs::Log::FATAL;
+        } else {
+            throw std::runtime_error(std::string("Unknown log level ") + level);
+        }
+    }
+
+    return levels;
+}
+
 int main(int argc, char **argv) {
 
 
@@ -240,6 +279,12 @@ int main(int argc, char **argv) {
     allow_verbose_logging = paramNh.param("verbose", false);
     if (allow_verbose_logging) {
         ROS_WARN("GPS node has verbose logging enabled");
+    }
+
+    std::string radio_log_levels_string = paramNh.param("radio_log_levels", std::string(""));
+    radio_log_levels = read_config_levels(radio_log_levels_string);
+    if (!radio_log_levels) {
+        ROS_WARN("Radio logging is is disabled");
     }
 
     isUbxInterface = paramNh.param("ubx_mode", true);
@@ -297,6 +342,8 @@ int main(int argc, char **argv) {
     ros::Subscriber wheel_tick_sub = paramNh.subscribe("wheel_ticks", 0, wheel_tick_received,
                                                        ros::TransportHints().tcpNoDelay(true));
     ros::Subscriber rtcm_sub = n.subscribe("rtcm", 0, rtcm_received,
+                                           ros::TransportHints().tcpNoDelay(true));
+    ros::Subscriber rosout_sub = n.subscribe("radio_log_in", 0, log_received,
                                            ros::TransportHints().tcpNoDelay(true));
 
 

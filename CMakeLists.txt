@@ -11,6 +11,7 @@ find_package(catkin REQUIRED COMPONENTS
         robot_localization
         tf2_geometry_msgs
         tf2
+        rosgraph_msgs
         )
 
 # Geographiclib installs FindGeographicLib.cmake to this non-standard location
