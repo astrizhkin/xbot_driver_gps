@@ -139,7 +139,7 @@ void rtcm_received(const rtcm_msgs::Message::ConstPtr &rtcm) {
 
 void log_received(const rosgraph_msgs::Log::ConstPtr &msg) {
     if (radio_log_levels & msg->level) {
-        ROS_INFO_STREAM("Sending radio message [" << msg->msg << "]");
+        ROS_DEBUG_STREAM("Sending radio message [" << msg->msg << "]");
         const uint8_t *chars = (const uint8_t *)msg->msg.data();
         gpsInterface->send_rtcm(chars, msg->msg.length());
     }
