@@ -184,7 +184,8 @@ void convert_gps_result(const GpsInterface::GpsState &state, xbot_msgs::Absolute
     result.pose.pose.position.y = state.pos_n;
     result.pose.pose.position.z = state.pos_u;
 
-    tf2::Quaternion q_mag(0.0, 0.0, heading);
+    tf2::Quaternion q_mag;
+    q_mag.setRPY(0.0, 0.0, heading);
     result.pose.pose.orientation = tf2::toMsg(q_mag);
 
     result.pose.covariance = {
