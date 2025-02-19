@@ -3,14 +3,14 @@
 // Copyright (c) 2022 Clemens Elflein. All rights reserved.
 //
 
-//#define WHEEL_TICK_ENABLE
+//#define WHEEL_TICKS_MSG
 
 #include "ros/ros.h"
 #include "devices/serial_gps_device.h"
 #include "devices/tcp_gps_device.h"
 #include "interfaces/ublox_gps_interface.h"
 #include "interfaces/nmea_gps_interface.h"
-#ifdef WHEEL_TICK_ENABLE
+#ifdef WHEEL_TICKS_MSG
     #include "xbot_msgs/WheelTick.h"
 #endif
 #include "geometry_msgs/PoseWithCovariance.h"
@@ -49,7 +49,7 @@ xbot_msgs::AbsolutePose pose_result;
 std_msgs::UInt32 latency_msg1, latency_msg2, latency_msg3;
 sensor_msgs::Imu imu_msg;
 
-#ifdef WHEEL_TICK_ENABLE
+#ifdef WHEEL_TICKS_MSG
     ros::Time last_wheel_tick_time(0.0);
 #endif
 ros::Time last_vrs_feedback(0.0);
@@ -126,7 +126,7 @@ void gps_log(std::string text, LogLevel level) {
     }
 }
 
-#ifdef WHEEL_TICK_ENABLE
+#ifdef WHEEL_TICKS_MSG
 void wheel_tick_received(const xbot_msgs::WheelTick::ConstPtr &msg) {
     // Limit frequency
     if (msg->stamp - last_wheel_tick_time < ros::Duration(0.09))
@@ -347,7 +347,7 @@ int main(int argc, char **argv) {
     }
 
 
-    #ifdef WHEEL_TICK_ENABLE
+    #ifdef WHEEL_TICKS_MSG
         // Subscribe to wheel ticks
         ros::Subscriber wheel_tick_sub = paramNh.subscribe("wheel_ticks", 0, wheel_tick_received,
                                                        ros::TransportHints().tcpNoDelay(true));
