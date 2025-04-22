@@ -10,6 +10,7 @@
 #include "devices/tcp_gps_device.h"
 #include "interfaces/ublox_gps_interface.h"
 #include "interfaces/nmea_gps_interface.h"
+#include "xbot_driver_gps/SetDatumSrv.h"
 #ifdef WHEEL_TICKS_MSG
     #include "xbot_msgs/WheelTick.h"
 #endif
@@ -48,6 +49,9 @@ xbot_msgs::AbsolutePose pose_result;
 
 std_msgs::UInt32 latency_msg1, latency_msg2, latency_msg3;
 sensor_msgs::Imu imu_msg;
+
+double datum_lat, datum_long, datum_height;
+bool has_datum; 
 
 #ifdef WHEEL_TICKS_MSG
     ros::Time last_wheel_tick_time(0.0);
@@ -147,7 +151,7 @@ void rtcm_received(const rtcm_msgs::Message::ConstPtr &rtcm) {
 
 void log_received(const rosgraph_msgs::Log::ConstPtr &msg) {
     if (radio_log_levels & msg->level) {
-        ROS_DEBUG_STREAM("Sending radio message [" << msg->msg << "]");
+        ROS_DEBUG_STREAM("[driver_gps] Sending radio message [" << msg->msg << "]");
         const uint8_t *chars = (const uint8_t *)msg->msg.data();
         gpsInterface->send_rtcm(chars, msg->msg.length());
     }
@@ -277,6 +281,22 @@ read_config_levels(std::string& levels_string) {
     return levels;
 }
 
+bool setDatum(xbot_driver_gps::SetDatumSrvRequest &req, xbot_driver_gps::SetDatumSrvResponse &res) {
+    if(req.revert_default) {
+        if(has_datum) {
+            ROS_INFO_STREAM("[driver_gps] Revert default datum");
+            gpsInterface->set_datum(datum_lat, datum_long, datum_height);        
+        }else{
+            ROS_WARN_STREAM("[driver_gps] No default datum to revert");
+            return false;
+        }
+    } else {
+        ROS_INFO_STREAM("[driver_gps] Set datum "<<req.longitute<<"E, "<<req.latitude<<"N, "<<req.height);
+        gpsInterface->set_datum(req.latitude, req.longitute, req.height);
+    }
+    return true;
+}
+
 int main(int argc, char **argv) {
 
 
@@ -287,21 +307,21 @@ int main(int argc, char **argv) {
 
     allow_verbose_logging = paramNh.param("verbose", false);
     if (allow_verbose_logging) {
-        ROS_WARN("GPS node has verbose logging enabled");
+        ROS_WARN("[driver_gps] GPS node has verbose logging enabled");
     }
 
     std::string radio_log_levels_string = paramNh.param("radio_log_levels", std::string(""));
     radio_log_levels = read_config_levels(radio_log_levels_string);
     if (!radio_log_levels) {
-        ROS_WARN("Radio logging is is disabled");
+        ROS_WARN("[driver_gps] Radio logging is is disabled");
     }
 
     isUbxInterface = paramNh.param("ubx_mode", true);
     if(isUbxInterface) {
-        ROS_INFO_STREAM("Using UBX mode for GPS");
+        ROS_INFO_STREAM("[driver_gps] Using UBX mode for GPS");
         gpsInterface = new UbxGpsInterface();
     } else {
-        ROS_INFO_STREAM("Using NMEA mode for GPS");
+        ROS_INFO_STREAM("[driver_gps] Using NMEA mode for GPS");
         gpsInterface = new NmeaGpsInterface(allow_verbose_logging);
     }
 
@@ -319,30 +339,29 @@ int main(int argc, char **argv) {
         device->set_port(paramNh.param("tcp_port", std::string("")));
         gpsInterface->set_device(device);
     } else if (device_type == "file") {
-        ROS_INFO_STREAM("Reading GPS data from file!");
+        ROS_INFO_STREAM("[driver_gps] Reading GPS data from file!");
         gpsInterface->set_file_name(paramNh.param("filename", std::string("/dev/null")));
     } else {
-        ROS_ERROR_STREAM("Invalid device type");
+        ROS_ERROR_STREAM("[driver_gps] Invalid device type");
         return 2;
     }
 
     std::string mode = paramNh.param("mode", std::string("absolute"));
     if (mode == "absolute") {
-        ROS_INFO_STREAM("Using absolute mode for GPS");
+        ROS_INFO_STREAM("[driver_gps] Using absolute mode for GPS");
         gpsInterface->set_mode(xbot::driver::gps::GpsInterface::ABSOLUTE);
-        double datum_lat, datum_long, datum_height;
-        bool has_datum = true;
+        has_datum = true;
         has_datum &= paramNh.getParam("datum_lat", datum_lat);
         has_datum &= paramNh.getParam("datum_long", datum_long);
         has_datum &= paramNh.getParam("datum_height", datum_height);
         if (!has_datum) {
             ROS_ERROR_STREAM(
-                    "You need to provide datum_lat and datum_long and datum_height in order to use the absolute mode");
+                    "[driver_gps] You need to provide datum_lat and datum_long and datum_height in order to use the absolute mode");
             return 2;
         }
         gpsInterface->set_datum(datum_lat, datum_long, datum_height);
     } else if (mode == "relative") {
-        ROS_INFO_STREAM("Using relative mode for GPS");
+        ROS_INFO_STREAM("[driver_gps] Using relative mode for GPS");
         gpsInterface->set_mode(xbot::driver::gps::GpsInterface::RELATIVE);
     }
 
@@ -363,6 +382,7 @@ int main(int argc, char **argv) {
     xbot_pose_pub = paramNh.advertise<xbot_msgs::AbsolutePose>("xb_pose", 10);
     imu_pub = paramNh.advertise<sensor_msgs::Imu>("imu", 10);
 
+    ros::ServiceServer set_datum_srv = paramNh.advertiseService("set_datum", setDatum);
 
     gpsInterface->set_state_callback(gps_state_received);
 

@@ -12,7 +12,20 @@ find_package(catkin REQUIRED COMPONENTS
         tf2_geometry_msgs
         tf2
         rosgraph_msgs
+        message_generation
         )
+
+add_service_files(
+        FILES
+        SetDatumSrv.srv
+        )
+
+## Generate added messages and services with any dependencies listed here
+generate_messages(
+        DEPENDENCIES
+#        std_msgs
+#        geometry_msgs
+)
 
 # Geographiclib installs FindGeographicLib.cmake to this non-standard location
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "/usr/share/cmake/geographiclib/")

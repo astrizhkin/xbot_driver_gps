@@ -1,0 +1,5 @@
+float64 longitute
+float64 latitude
+float64 height
+bool revert_default
+---
