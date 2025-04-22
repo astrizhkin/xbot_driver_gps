@@ -286,8 +286,9 @@ bool setDatum(xbot_driver_gps::SetDatumSrvRequest &req, xbot_driver_gps::SetDatu
         if(has_datum) {
             ROS_INFO_STREAM("[driver_gps] Revert default datum");
             gpsInterface->set_datum(datum_lat, datum_long, datum_height);        
-        }else{
-            ROS_WARN_STREAM("[driver_gps] No default datum to revert");
+        } else {
+            ROS_WARN_STREAM("[driver_gps] No default datum to revert. Set to NAN");
+            gpsInterface->set_datum(NAN, NAN, NAN);
             return false;
         }
     } else {
