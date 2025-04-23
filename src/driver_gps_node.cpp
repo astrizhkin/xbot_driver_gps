@@ -299,8 +299,6 @@ bool setDatum(xbot_driver_gps::SetDatumSrvRequest &req, xbot_driver_gps::SetDatu
 }
 
 int main(int argc, char **argv) {
-
-
     ros::init(argc, argv, "xbot_driver_gps");
 
     ros::NodeHandle n;

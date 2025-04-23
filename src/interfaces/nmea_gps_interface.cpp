@@ -77,9 +77,9 @@ xbot::driver::gps::NmeaGpsInterface::NmeaGpsInterface(bool verboseLogging) : Gps
         gps_state_.pos_lat = fix.latitude;
         gps_state_.pos_lon = fix.longitude;
         gps_state_.position_valid = true;
-        gps_state_.pos_e = e - datum_e_;
-        gps_state_.pos_n = n - datum_n_;
-        gps_state_.pos_u = fix.altitude - datum_u_;
+        gps_state_.pos_e = mode_ == GpsInterface::ABSOLUTE ? e - datum_e_ : e;
+        gps_state_.pos_n = mode_ == GpsInterface::ABSOLUTE ? n - datum_n_ : n;
+        gps_state_.pos_u = mode_ == GpsInterface::ABSOLUTE ? fix.altitude - datum_u_ : fix.altitude;
 
         gps_state_.position_accuracy = fix.horizontalAccuracy();
 
