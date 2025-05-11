@@ -45,8 +45,10 @@ namespace xbot {
                         RTK_FIX = 2
                     };
 
-                    uint32_t sensor_time;
-                    uint32_t received_time;
+                    int64_t position_time_ms;
+                    int64_t speed_time_ms;
+                    int64_t deviation_time_ms;
+                    int64_t received_time;
 
                     // Position
                     bool position_valid;
@@ -75,7 +77,7 @@ namespace xbot {
                 };
 
                 struct ImuState {
-                    uint32_t sensor_time;
+                    uint64_t sensor_time;
                     uint32_t received_time;
 
                     // acceleration in m/s

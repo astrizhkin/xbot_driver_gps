@@ -90,11 +90,14 @@ xbot::driver::gps::NmeaGpsInterface::NmeaGpsInterface(bool verboseLogging) : Gps
         gps_state_.vel_n = cos(angle_rad) * speed;
         gps_state_.vel_u = 0;
 
+        gps_state_.motion_heading = angle_rad;
         gps_state_.motion_heading_valid = true;
         gps_state_.vehicle_heading_valid = false;
 
-        gps_state_.sensor_time = fix.timestamp.getTime();
-        gps_state_.received_time = fix.timestamp.getTime();
+        gps_state_.position_time_ms = fix.positionTimestamp.getTimeMilliseconds();
+        gps_state_.speed_time_ms = fix.speedTimestamp.getTimeMilliseconds();
+        gps_state_.deviation_time_ms = fix.deviationTimestamp.getTimeMilliseconds();
+        gps_state_.received_time = fix.positionTimestamp.getTime();
 
         gps_state_valid_ = true;
 

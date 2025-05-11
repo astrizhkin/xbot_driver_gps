@@ -164,8 +164,11 @@ void convert_gps_result(const GpsInterface::GpsState &state, xbot_msgs::Absolute
 
     result.source = xbot_msgs::AbsolutePose::SOURCE_GPS;
     result.flags = 0;
-    result.sensor_stamp = state.sensor_time;
+    result.position_stamp_ms  = state.position_time_ms;
+    result.speed_stamp_ms     = state.speed_time_ms;
+    result.deviation_stamp_ms = state.deviation_time_ms;
     result.received_stamp = state.received_time;
+
     switch (state.rtk_type) {
         case GpsInterface::GpsState::RTK_FLOAT:
             result.flags = xbot_msgs::AbsolutePose::FLAG_GPS_RTK | xbot_msgs::AbsolutePose::FLAG_GPS_RTK_FLOAT;

@@ -244,7 +244,9 @@ namespace xbot {
                 gps_state_.vehicle_heading_accuracy = headAcc;
                 gps_state_.vehicle_heading = hedVeh;
 
-                gps_state_.sensor_time = msg->iTOW;
+                gps_state_.position_time_ms = msg->iTOW;
+                gps_state_.speed_time_ms = msg->iTOW;
+                gps_state_.deviation_time_ms = msg->iTOW;
                 gps_state_.received_time = duration_cast<milliseconds>(header_stamp.time_since_epoch()).count();
 
                 // Latency tracking
