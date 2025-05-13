@@ -45,20 +45,19 @@ namespace xbot {
                         RTK_FIX = 2
                     };
 
-                    int64_t position_time_ms;
-                    int64_t speed_time_ms;
-                    int64_t deviation_time_ms;
-                    int64_t received_time;
+                    uint64_t epoch_ms;
+                    uint64_t received_time;
 
                     // Position
                     bool position_valid;
-                    // Position accuracy in m
-                    double position_accuracy;
                     double pos_e, pos_n, pos_u;
-
                     // Pos in lat/lon for VRS
                     double pos_lat, pos_lon;
 
+                    // Position accuracy in m
+                    double position_accuracy_valid;
+                    double position_accuracy;
+                    
                     // Motion
                     bool motion_heading_valid;
                     double vel_e, vel_n, vel_u;

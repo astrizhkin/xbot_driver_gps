@@ -164,9 +164,7 @@ void convert_gps_result(const GpsInterface::GpsState &state, xbot_msgs::Absolute
 
     result.source = xbot_msgs::AbsolutePose::SOURCE_GPS;
     result.flags = 0;
-    result.position_stamp_ms  = state.position_time_ms;
-    result.speed_stamp_ms     = state.speed_time_ms;
-    result.deviation_stamp_ms = state.deviation_time_ms;
+    result.sensor_stamp  = state.epoch_ms;
     result.received_stamp = state.received_time;
 
     switch (state.rtk_type) {
@@ -187,7 +185,7 @@ void convert_gps_result(const GpsInterface::GpsState &state, xbot_msgs::Absolute
 
 
     result.orientation_valid = state.vehicle_heading_valid;
-    result.motion_vector_valid = true;
+    result.motion_vector_valid = state.motion_heading_valid;
     result.position_accuracy = state.position_accuracy;
     result.orientation_accuracy = state.vehicle_heading_accuracy;
 
@@ -324,7 +322,7 @@ int main(int argc, char **argv) {
         gpsInterface = new UbxGpsInterface();
     } else {
         ROS_INFO_STREAM("[driver_gps] Using NMEA mode for GPS");
-        gpsInterface = new NmeaGpsInterface(allow_verbose_logging);
+        gpsInterface = new NmeaGpsInterface(allow_verbose_logging, true);
     }
 
     gpsInterface->set_log_function(gps_log);
