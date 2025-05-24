@@ -124,8 +124,8 @@ xbot::driver::gps::NmeaGpsInterface::NmeaGpsInterface(bool verboseLogging, bool 
         gps_state_.received_time = fix.last_epoch.getTime();
 
         gps_state_valid_ = gps_state_.position_valid && gps_state_.position_accuracy_valid && gps_state_.motion_heading_valid;
-
-        log(std::string("gps update message ") + std::to_string(messageId), INFO);
+        
+        //log(std::string("gps update message ") + std::to_string(messageId), INFO);
 
         if(reportEveryUpdate || gps_state_valid_) {
             if (state_callback) {
