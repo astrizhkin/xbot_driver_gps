@@ -37,7 +37,6 @@ xbot::driver::gps::NmeaGpsInterface::NmeaGpsInterface(bool verboseLogging, bool 
         if(messageId == NMEASentence::MessageID::VTG || messageId == NMEASentence::MessageID::GSV) {
             return;
         }
-
         auto &fix = this->gps.fix;
 
         uint64_t GGA_ms  = fix.GGA_epoch.getTimeMilliseconds();
@@ -117,12 +116,12 @@ xbot::driver::gps::NmeaGpsInterface::NmeaGpsInterface(bool verboseLogging, bool 
 
         gps_state_valid_ = gps_state_.position_valid && gps_state_.position_accuracy_valid && gps_state_.motion_heading_valid;
 
-        if(!reportEveryUpdate && !gps_state_valid_) {
-            return;
-        }  
+        log(std::string("gps update message ") + std::to_string(messageId), INFO);
 
-        if (state_callback) {
-            state_callback(gps_state_);
+        if(reportEveryUpdate || gps_state_valid_) {
+            if (state_callback) {
+                state_callback(gps_state_);
+            }
         }
     };
 }
