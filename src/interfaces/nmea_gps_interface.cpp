@@ -31,8 +31,9 @@ xbot::driver::gps::NmeaGpsInterface::NmeaGpsInterface(bool verboseLogging, bool 
     //enable/disable NMEA parser logging
     parser.logWarn = true;
     parser.logInfo = verboseLogging;
+    uint64_t last_GSA_ms = 0;
     
-    gps.onUpdate += [this, reportEveryUpdate](NMEASentence::MessageID messageId) {
+    gps.onUpdate += [this, reportEveryUpdate, &last_GSA_ms](NMEASentence::MessageID messageId) {
         //we skip updates for messages not involed in gps status calucaltions
         if(messageId == NMEASentence::MessageID::VTG || messageId == NMEASentence::MessageID::GSV) {
             return;
@@ -44,6 +45,14 @@ xbot::driver::gps::NmeaGpsInterface::NmeaGpsInterface(bool verboseLogging, bool 
         uint64_t GST_ms  = fix.GST_epoch.getTimeMilliseconds();
         uint64_t GSA_ms  = fix.GSA_epoch.getTimeMilliseconds();
         uint64_t last_ms = fix.last_epoch.getTimeMilliseconds();
+
+        if(messageId == NMEASentence::MessageID::GSA) {
+            //we skip repating GSA messages as they are not involed in gps status calucaltions
+            if(GSA_ms == last_GSA_ms) {
+                return;
+            }
+            last_GSA_ms = GSA_ms;
+        }
 
         //GSA/type
         if(fix.type != 2 && fix.type != 3) {
