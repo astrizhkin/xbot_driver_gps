@@ -164,7 +164,7 @@ void convert_gps_result(const GpsInterface::GpsState &state, xbot_msgs::Absolute
 
     result.source = xbot_msgs::AbsolutePose::SOURCE_GPS;
     result.flags = 0;
-    result.sensor_stamp  = state.epoch_ms;
+    result.epoch_ms  = state.epoch_ms;
     result.received_stamp = state.received_time;
 
     switch (state.rtk_type) {
@@ -183,19 +183,22 @@ void convert_gps_result(const GpsInterface::GpsState &state, xbot_msgs::Absolute
         result.flags |= xbot_msgs::AbsolutePose::FLAG_GPS_DEAD_RECKONING;
     }
 
-
+    //orientation
     result.orientation_valid = state.vehicle_heading_valid;
-    result.motion_vector_valid = state.motion_heading_valid;
-    result.position_accuracy = state.position_accuracy;
     result.orientation_accuracy = state.vehicle_heading_accuracy;
 
+    //position accuracy
+    result.position_accuracy = state.position_accuracy;
+    result.position_accuracy_valid = state.position_accuracy_valid;
 
-    double heading = state.vehicle_heading_valid ? state.vehicle_heading : state.motion_heading;
-    double headingAcc = state.vehicle_heading_valid ? state.vehicle_heading_accuracy : state.motion_heading_accuracy;
-
+    //pose and heading
+    result.pose_valid = state.position_valid;
     result.pose.pose.position.x = state.pos_e;
     result.pose.pose.position.y = state.pos_n;
     result.pose.pose.position.z = state.pos_u;
+
+    double heading = state.vehicle_heading_valid ? state.vehicle_heading : state.motion_heading;
+    double headingAcc = state.vehicle_heading_valid ? state.vehicle_heading_accuracy : state.motion_heading_accuracy;
 
     tf2::Quaternion q_mag;
     q_mag.setRPY(0.0, 0.0, heading);
@@ -210,7 +213,8 @@ void convert_gps_result(const GpsInterface::GpsState &state, xbot_msgs::Absolute
             0.0, 0.0, 0.0, 0.0, 0.0, pow(headingAcc, 2)
     };
 
-
+    //motion vector
+    result.motion_vector_valid = state.motion_heading_valid;
     result.motion_vector.x = state.vel_e;
     result.motion_vector.y = state.vel_n;
     result.motion_vector.z = state.vel_u;
