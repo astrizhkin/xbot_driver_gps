@@ -208,9 +208,10 @@ namespace xbot {
                 gps_state_.pos_lat = lat;
                 gps_state_.pos_lon = lon;
                 gps_state_.position_valid = true;
-                gps_state_.pos_e = e - datum_e_;
-                gps_state_.pos_n = n - datum_n_;
-                gps_state_.pos_u = u - datum_u_;
+                gps_state_.pos_e = mode_ == GpsInterface::ABSOLUTE ? e - datum_e_ : e;
+                gps_state_.pos_n = mode_ == GpsInterface::ABSOLUTE ? n - datum_n_ : n;
+                gps_state_.pos_u = mode_ == GpsInterface::ABSOLUTE ? u - datum_u_ : u;
+                gps_state_.position_accuracy_valid = true;
                 gps_state_.position_accuracy = (double) msg->hAcc / 1000.0;
 
                 gps_state_.vel_e = msg->velE / 1000.0;
@@ -244,7 +245,7 @@ namespace xbot {
                 gps_state_.vehicle_heading_accuracy = headAcc;
                 gps_state_.vehicle_heading = hedVeh;
 
-                gps_state_.sensor_time = msg->iTOW;
+                gps_state_.epoch_ms = msg->iTOW;
                 gps_state_.received_time = duration_cast<milliseconds>(header_stamp.time_since_epoch()).count();
 
                 // Latency tracking

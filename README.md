@@ -51,7 +51,8 @@ TODO
 
 ## Subscribed Topics:
 
-- **/rtcm (rtcm_msgs/Message)** RTCM which will be sent to the GPS
+- **/rtcm (rtcm_msgs/Message)** RTCM which will be sent to the GPS (if gps_device output connected to gps_device itself)
+- **/radio_log_in (rosgraph_msgs/Log)** Log messages (normally mapped to /rosout_agg topic)to be sent to the radio (if gps_device output connected to the radio module)
 - **/wheel_ticks (xbot_msgs/WheelTick)** WheelTick messages which will be sent to the GPS for sensor fusion (e.g. F9R)
 
 ## Published Topics:

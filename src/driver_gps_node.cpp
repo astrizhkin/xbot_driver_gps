@@ -3,12 +3,17 @@
 // Copyright (c) 2022 Clemens Elflein. All rights reserved.
 //
 
+//#define WHEEL_TICKS_MSG
+
 #include "ros/ros.h"
 #include "devices/serial_gps_device.h"
 #include "devices/tcp_gps_device.h"
 #include "interfaces/ublox_gps_interface.h"
 #include "interfaces/nmea_gps_interface.h"
-#include "xbot_msgs/WheelTick.h"
+#include "xbot_driver_gps/SetDatumSrv.h"
+#ifdef WHEEL_TICKS_MSG
+    #include "xbot_msgs/WheelTick.h"
+#endif
 #include "geometry_msgs/PoseWithCovariance.h"
 #include "xbot_msgs/AbsolutePose.h"
 #include <tf2/LinearMath/Quaternion.h>
@@ -22,6 +27,8 @@
 #include "nmea_msgs/Sentence.h"
 #include <boost/date_time/posix_time/posix_time.hpp>
 #include <boost/date_time/posix_time/posix_time_io.hpp>
+
+#include <rosgraph_msgs/Log.h>
 
 using namespace xbot::driver::gps;
 using namespace nmea;
@@ -43,9 +50,16 @@ xbot_msgs::AbsolutePose pose_result;
 std_msgs::UInt32 latency_msg1, latency_msg2, latency_msg3;
 sensor_msgs::Imu imu_msg;
 
-ros::Time last_wheel_tick_time(0.0);
+double datum_lat, datum_long, datum_height;
+bool has_datum; 
+
+#ifdef WHEEL_TICKS_MSG
+    ros::Time last_wheel_tick_time(0.0);
+#endif
 ros::Time last_vrs_feedback(0.0);
 nmea_msgs::Sentence vrs_msg;
+
+uint8_t radio_log_levels = 0;
 
 void generate_nmea(double lat_in, double lon_in) {
     // only send every 10 seconds, this will be more than needed
@@ -116,6 +130,7 @@ void gps_log(std::string text, LogLevel level) {
     }
 }
 
+#ifdef WHEEL_TICKS_MSG
 void wheel_tick_received(const xbot_msgs::WheelTick::ConstPtr &msg) {
     // Limit frequency
     if (msg->stamp - last_wheel_tick_time < ros::Duration(0.09))
@@ -128,9 +143,18 @@ void wheel_tick_received(const xbot_msgs::WheelTick::ConstPtr &msg) {
                                   msg->wheel_direction_rr, (uint32_t)(msg->wheel_pos_rr * msg->wheel_pos_to_tick_factor));
     last_wheel_tick_time = msg->stamp;
 }
+#endif
 
 void rtcm_received(const rtcm_msgs::Message::ConstPtr &rtcm) {
     gpsInterface->send_rtcm(rtcm->message.data(), rtcm->message.size());
+}
+
+void log_received(const rosgraph_msgs::Log::ConstPtr &msg) {
+    if (radio_log_levels & msg->level) {
+        ROS_DEBUG_STREAM("[driver_gps] Sending radio message [" << msg->msg << "]");
+        const uint8_t *chars = (const uint8_t *)msg->msg.data();
+        gpsInterface->send_rtcm(chars, msg->msg.length());
+    }
 }
 
 void convert_gps_result(const GpsInterface::GpsState &state, xbot_msgs::AbsolutePose &result) {
@@ -140,8 +164,9 @@ void convert_gps_result(const GpsInterface::GpsState &state, xbot_msgs::Absolute
 
     result.source = xbot_msgs::AbsolutePose::SOURCE_GPS;
     result.flags = 0;
-    result.sensor_stamp = state.sensor_time;
+    result.epoch_ms  = state.epoch_ms;
     result.received_stamp = state.received_time;
+
     switch (state.rtk_type) {
         case GpsInterface::GpsState::RTK_FLOAT:
             result.flags = xbot_msgs::AbsolutePose::FLAG_GPS_RTK | xbot_msgs::AbsolutePose::FLAG_GPS_RTK_FLOAT;
@@ -158,21 +183,25 @@ void convert_gps_result(const GpsInterface::GpsState &state, xbot_msgs::Absolute
         result.flags |= xbot_msgs::AbsolutePose::FLAG_GPS_DEAD_RECKONING;
     }
 
-
+    //orientation
     result.orientation_valid = state.vehicle_heading_valid;
-    result.motion_vector_valid = true;
-    result.position_accuracy = state.position_accuracy;
     result.orientation_accuracy = state.vehicle_heading_accuracy;
 
+    //position accuracy
+    result.position_accuracy = state.position_accuracy;
+    result.position_accuracy_valid = state.position_accuracy_valid;
 
-    double heading = state.vehicle_heading_valid ? state.vehicle_heading : state.motion_heading;
-    double headingAcc = state.vehicle_heading_valid ? state.vehicle_heading_accuracy : state.motion_heading_accuracy;
-
+    //pose and heading
+    result.pose_valid = state.position_valid;
     result.pose.pose.position.x = state.pos_e;
     result.pose.pose.position.y = state.pos_n;
     result.pose.pose.position.z = state.pos_u;
 
-    tf2::Quaternion q_mag(0.0, 0.0, heading);
+    double heading = state.vehicle_heading_valid ? state.vehicle_heading : state.motion_heading;
+    double headingAcc = state.vehicle_heading_valid ? state.vehicle_heading_accuracy : state.motion_heading_accuracy;
+
+    tf2::Quaternion q_mag;
+    q_mag.setRPY(0.0, 0.0, heading);
     result.pose.pose.orientation = tf2::toMsg(q_mag);
 
     result.pose.covariance = {
@@ -184,7 +213,8 @@ void convert_gps_result(const GpsInterface::GpsState &state, xbot_msgs::Absolute
             0.0, 0.0, 0.0, 0.0, 0.0, pow(headingAcc, 2)
     };
 
-
+    //motion vector
+    result.motion_vector_valid = state.motion_heading_valid;
     result.motion_vector.x = state.vel_e;
     result.motion_vector.y = state.vel_n;
     result.motion_vector.z = state.vel_u;
@@ -229,9 +259,51 @@ imu_received(const GpsInterface::ImuState &state) {
     imu_pub.publish(imu_msg);
 }
 
+uint8_t
+read_config_levels(std::string& levels_string) {
+    uint8_t levels = 0;
+
+    std::stringstream ss(levels_string);
+
+    while( ss.good() ) {
+        std::string level;
+        getline( ss, level, ',' );
+        if (level == "DEBUG") {
+            levels |= rosgraph_msgs::Log::DEBUG;
+        } else if (level == "INFO") {
+            levels |= rosgraph_msgs::Log::INFO;
+        } else if (level == "WARN") {
+            levels |= rosgraph_msgs::Log::WARN;
+        } else if (level == "ERROR") {
+            levels |= rosgraph_msgs::Log::ERROR;
+        } else if (level == "FATAL") {
+            levels |= rosgraph_msgs::Log::FATAL;
+        } else {
+            throw std::runtime_error(std::string("Unknown log level ") + level);
+        }
+    }
+
+    return levels;
+}
+
+bool setDatum(xbot_driver_gps::SetDatumSrvRequest &req, xbot_driver_gps::SetDatumSrvResponse &res) {
+    if(req.revert_default) {
+        if(has_datum) {
+            ROS_INFO_STREAM("[driver_gps] Revert default datum");
+            gpsInterface->set_datum(datum_lat, datum_long, datum_height);        
+        } else {
+            ROS_WARN_STREAM("[driver_gps] No default datum to revert. Set to NAN");
+            gpsInterface->set_datum(NAN, NAN, NAN);
+            return false;
+        }
+    } else {
+        ROS_INFO_STREAM("[driver_gps] Set datum "<<req.longitute<<"E, "<<req.latitude<<"N, "<<req.height);
+        gpsInterface->set_datum(req.latitude, req.longitute, req.height);
+    }
+    return true;
+}
+
 int main(int argc, char **argv) {
-
-
     ros::init(argc, argv, "xbot_driver_gps");
 
     ros::NodeHandle n;
@@ -239,16 +311,22 @@ int main(int argc, char **argv) {
 
     allow_verbose_logging = paramNh.param("verbose", false);
     if (allow_verbose_logging) {
-        ROS_WARN("GPS node has verbose logging enabled");
+        ROS_WARN("[driver_gps] GPS node has verbose logging enabled");
+    }
+
+    std::string radio_log_levels_string = paramNh.param("radio_log_levels", std::string(""));
+    radio_log_levels = read_config_levels(radio_log_levels_string);
+    if (!radio_log_levels) {
+        ROS_WARN("[driver_gps] Radio logging is is disabled");
     }
 
     isUbxInterface = paramNh.param("ubx_mode", true);
     if(isUbxInterface) {
-        ROS_INFO_STREAM("Using UBX mode for GPS");
+        ROS_INFO_STREAM("[driver_gps] Using UBX mode for GPS");
         gpsInterface = new UbxGpsInterface();
     } else {
-        ROS_INFO_STREAM("Using NMEA mode for GPS");
-        gpsInterface = new NmeaGpsInterface(allow_verbose_logging);
+        ROS_INFO_STREAM("[driver_gps] Using NMEA mode for GPS");
+        gpsInterface = new NmeaGpsInterface(allow_verbose_logging, true);
     }
 
     gpsInterface->set_log_function(gps_log);
@@ -265,38 +343,41 @@ int main(int argc, char **argv) {
         device->set_port(paramNh.param("tcp_port", std::string("")));
         gpsInterface->set_device(device);
     } else if (device_type == "file") {
-        ROS_INFO_STREAM("Reading GPS data from file!");
+        ROS_INFO_STREAM("[driver_gps] Reading GPS data from file!");
         gpsInterface->set_file_name(paramNh.param("filename", std::string("/dev/null")));
     } else {
-        ROS_ERROR_STREAM("Invalid device type");
+        ROS_ERROR_STREAM("[driver_gps] Invalid device type");
         return 2;
     }
 
     std::string mode = paramNh.param("mode", std::string("absolute"));
     if (mode == "absolute") {
-        ROS_INFO_STREAM("Using absolute mode for GPS");
+        ROS_INFO_STREAM("[driver_gps] Using absolute mode for GPS");
         gpsInterface->set_mode(xbot::driver::gps::GpsInterface::ABSOLUTE);
-        double datum_lat, datum_long, datum_height;
-        bool has_datum = true;
+        has_datum = true;
         has_datum &= paramNh.getParam("datum_lat", datum_lat);
         has_datum &= paramNh.getParam("datum_long", datum_long);
         has_datum &= paramNh.getParam("datum_height", datum_height);
         if (!has_datum) {
             ROS_ERROR_STREAM(
-                    "You need to provide datum_lat and datum_long and datum_height in order to use the absolute mode");
+                    "[driver_gps] You need to provide datum_lat and datum_long and datum_height in order to use the absolute mode");
             return 2;
         }
         gpsInterface->set_datum(datum_lat, datum_long, datum_height);
     } else if (mode == "relative") {
-        ROS_INFO_STREAM("Using relative mode for GPS");
+        ROS_INFO_STREAM("[driver_gps] Using relative mode for GPS");
         gpsInterface->set_mode(xbot::driver::gps::GpsInterface::RELATIVE);
     }
 
 
-    // Subscribe to wheel ticks
-    ros::Subscriber wheel_tick_sub = paramNh.subscribe("wheel_ticks", 0, wheel_tick_received,
+    #ifdef WHEEL_TICKS_MSG
+        // Subscribe to wheel ticks
+        ros::Subscriber wheel_tick_sub = paramNh.subscribe("wheel_ticks", 0, wheel_tick_received,
                                                        ros::TransportHints().tcpNoDelay(true));
+    #endif
     ros::Subscriber rtcm_sub = n.subscribe("rtcm", 0, rtcm_received,
+                                           ros::TransportHints().tcpNoDelay(true));
+    ros::Subscriber rosout_sub = n.subscribe("radio_log_in", 0, log_received,
                                            ros::TransportHints().tcpNoDelay(true));
 
 
@@ -305,6 +386,7 @@ int main(int argc, char **argv) {
     xbot_pose_pub = paramNh.advertise<xbot_msgs::AbsolutePose>("xb_pose", 10);
     imu_pub = paramNh.advertise<sensor_msgs::Imu>("imu", 10);
 
+    ros::ServiceServer set_datum_srv = paramNh.advertiseService("set_datum", setDatum);
 
     gpsInterface->set_state_callback(gps_state_received);
 

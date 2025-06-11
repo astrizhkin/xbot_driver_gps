@@ -36,7 +36,11 @@ namespace xbot {
 
             void GpsInterface::set_datum(double datum_lat, double datum_long, double datum_height) {
                 datum_u_ = datum_height;
-                RobotLocalization::NavsatConversions::LLtoUTM(datum_lat, datum_long, datum_n_, datum_e_, datum_zone_);
+                if(std::isnan(datum_lat) || std::isnan(datum_long)) {
+                    datum_n_ = datum_e_ = datum_u_ = NAN;
+                } else {
+                    RobotLocalization::NavsatConversions::LLtoUTM(datum_lat, datum_long, datum_n_, datum_e_, datum_zone_);
+                }
             }
 
             void GpsInterface::set_mode(GpsInterface::Mode mode) {

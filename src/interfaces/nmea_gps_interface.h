@@ -17,7 +17,7 @@ namespace xbot {
         namespace gps {
             class NmeaGpsInterface : public GpsInterface {
             public:
-                NmeaGpsInterface(bool verboseLogging);
+                NmeaGpsInterface(bool verboseLogging, bool reportEveryUpdate);
             protected:
                 void reset_parser_state() override;
 

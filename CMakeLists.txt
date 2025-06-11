@@ -11,7 +11,21 @@ find_package(catkin REQUIRED COMPONENTS
         robot_localization
         tf2_geometry_msgs
         tf2
+        rosgraph_msgs
+        message_generation
         )
+
+add_service_files(
+        FILES
+        SetDatumSrv.srv
+        )
+
+## Generate added messages and services with any dependencies listed here
+generate_messages(
+        DEPENDENCIES
+#        std_msgs
+#        geometry_msgs
+)
 
 # Geographiclib installs FindGeographicLib.cmake to this non-standard location
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "/usr/share/cmake/geographiclib/")
@@ -24,7 +38,7 @@ ExternalProject_Add(
 
         PREFIX ${EP_NEMATODE}
         GIT_REPOSITORY https://github.com/astrizhkin/NemaTode
-        GIT_TAG b6a4654bd96dac82b3e4bc44fff3097a63762b5d
+        GIT_TAG ec627bc39607428163216b546f7a607f1fdc0fa5
         GIT_SHALLOW OFF
 
         BUILD_ALWAYS OFF
