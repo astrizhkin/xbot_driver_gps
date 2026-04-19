@@ -3,17 +3,12 @@
 // Copyright (c) 2022 Clemens Elflein. All rights reserved.
 //
 
-//#define WHEEL_TICKS_MSG
-
 #include "ros/ros.h"
 #include "devices/serial_gps_device.h"
 #include "devices/tcp_gps_device.h"
 #include "interfaces/ublox_gps_interface.h"
 #include "interfaces/nmea_gps_interface.h"
 #include "xbot_driver_gps/SetDatumSrv.h"
-#ifdef WHEEL_TICKS_MSG
-    #include "xbot_msgs/WheelTick.h"
-#endif
 #include "geometry_msgs/PoseWithCovariance.h"
 #include "xbot_msgs/AbsolutePose.h"
 #include <tf2/LinearMath/Quaternion.h>
@@ -53,9 +48,6 @@ sensor_msgs::Imu imu_msg;
 double datum_lat, datum_long, datum_height;
 bool has_datum; 
 
-#ifdef WHEEL_TICKS_MSG
-    ros::Time last_wheel_tick_time(0.0);
-#endif
 ros::Time last_vrs_feedback(0.0);
 nmea_msgs::Sentence vrs_msg;
 
@@ -129,21 +121,6 @@ void gps_log(std::string text, LogLevel level) {
             break;
     }
 }
-
-#ifdef WHEEL_TICKS_MSG
-void wheel_tick_received(const xbot_msgs::WheelTick::ConstPtr &msg) {
-    // Limit frequency
-    if (msg->stamp - last_wheel_tick_time < ros::Duration(0.09))
-        return;
-    // drop if not ubx
-    if(!isUbxInterface)
-        return;
-    ((UbxGpsInterface*)gpsInterface)->send_wheel_ticks(static_cast<uint32_t>(msg->stamp.toNSec() / 1000000), 
-                                  msg->wheel_direction_rl, (uint32_t)(msg->wheel_pos_rl * msg->wheel_pos_to_tick_factor),
-                                  msg->wheel_direction_rr, (uint32_t)(msg->wheel_pos_rr * msg->wheel_pos_to_tick_factor));
-    last_wheel_tick_time = msg->stamp;
-}
-#endif
 
 void rtcm_received(const rtcm_msgs::Message::ConstPtr &rtcm) {
     gpsInterface->send_rtcm(rtcm->message.data(), rtcm->message.size());
@@ -370,11 +347,6 @@ int main(int argc, char **argv) {
     }
 
 
-    #ifdef WHEEL_TICKS_MSG
-        // Subscribe to wheel ticks
-        ros::Subscriber wheel_tick_sub = paramNh.subscribe("wheel_ticks", 0, wheel_tick_received,
-                                                       ros::TransportHints().tcpNoDelay(true));
-    #endif
     ros::Subscriber rtcm_sub = n.subscribe("rtcm", 0, rtcm_received,
                                            ros::TransportHints().tcpNoDelay(true));
     ros::Subscriber rosout_sub = n.subscribe("radio_log_in", 0, log_received,
