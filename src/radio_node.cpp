@@ -79,7 +79,7 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length,uint16_t ms
   if (preamble == RSSI_RESPONSE_PREAMBLE) {
     parser.await_e22_rssi(false);
     if(length!=5) {
-      ROS_WARN("[radio] Got RSSI packet len=%u, expected 5", length);
+      ROS_WARN("[radio] Got RSSI packet len=%zu, expected 5", length);
       return;
     }
     const uint8_t addr     = frame[1];   // expect 0x00
