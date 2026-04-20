@@ -93,7 +93,7 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length,uint16_t ms
     const int ambient_dbm     = rssi_to_dbm(frame[3]);  // reg 0x00
     const int last_packet_dbm = rssi_to_dbm(frame[4]);  // reg 0x01
 
-    ROS_INFO("[radio] RSSI — ambient: %d dBm,  last packet: %d dBm", ambient_dbm, last_packet_dbm);
+    ROS_INFO("[radio] RSSI - ambient: %d dBm,  last packet: %d dBm", ambient_dbm, last_packet_dbm);
     return;
   }
   if (preamble == 0xD3) {
@@ -132,7 +132,7 @@ void on_rssi_timer(const ros::TimerEvent&) {
   parser.await_e22_rssi(true);
   g_rssi_sent_at = ros::Time::now();
   enqueue_tx(RSSI_CMD, sizeof(RSSI_CMD));
-  ROS_INFO("[radio] RSSI query sent");
+  //ROS_INFO("[radio] RSSI query sent");
 }
 
 // ── RX thread ──────────────────────────────────────────────────────────────
