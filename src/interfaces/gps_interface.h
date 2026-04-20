@@ -73,6 +73,10 @@ namespace xbot {
 
                     FixType fix_type;
                     RTKType rtk_type;
+
+                    uint16_t tracking_satelites;
+                    uint16_t visible_satelites;
+                    double average_snr;
                 };
 
                 struct ImuState {

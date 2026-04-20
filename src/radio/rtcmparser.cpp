@@ -166,8 +166,8 @@ void RTCMParser::process_byte(uint8_t byte)
 
       if (calc_crc_ == recv_crc_) {
         ++valid_count_;
-        ROS_INFO("[RTCMParser] Valid frame: preamble=0x%02X type=%u payload_len=%u",
-                  active_preamble_, msg_type_, msg_length_);
+        //ROS_INFO("[RTCMParser] Valid frame: preamble=0x%02X type=%u payload_len=%u",
+        //          active_preamble_, msg_type_, msg_length_);
         if (callback_) {
           callback_(active_preamble_, frame_buf_, frame_len_, msg_type_);
         }

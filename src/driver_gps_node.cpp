@@ -51,6 +51,9 @@ bool has_datum;
 ros::Time last_vrs_feedback(0.0);
 nmea_msgs::Sentence vrs_msg;
 
+static std::map<std::string, ros::Time> g_rtcm_last_stamp;
+ros::Time g_last_rtcm(0.0);
+
 uint8_t radio_log_levels = 0;
 
 void generate_nmea(double lat_in, double lon_in) {
@@ -123,6 +126,8 @@ void gps_log(std::string text, LogLevel level) {
 }
 
 void rtcm_received(const rtcm_msgs::Message::ConstPtr &rtcm) {
+    g_last_rtcm = rtcm->header.stamp;
+    g_rtcm_last_stamp[rtcm->header.frame_id] = rtcm->header.stamp;
     gpsInterface->send_rtcm(rtcm->message.data(), rtcm->message.size());
 }
 
@@ -206,13 +211,13 @@ void gps_state_received(const GpsInterface::GpsState &state) {
     convert_gps_result(state, pose_result);
     xbot_pose_pub.publish(pose_result);
     pose_pub.publish(pose_result.pose);
-
+    double rtcm_age = (ros::Time::now() - g_last_rtcm).toSec();
+    ROS_INFO_THROTTLE(10,"[driver_gps] GNSS: %d tracking of %d visible, avgSNR %f, RTCM age %ds",state.tracking_satelites, state.visible_satelites, state.average_snr, rtcm_age);
     // send feedback to VRS
     generate_nmea(state.pos_lat, state.pos_lon);
 }
 
-void
-wheel_latency_received(uint32_t wheel_tick_stamp, uint32_t wheel_tick_stamp_ublox,
+void wheel_latency_received(uint32_t wheel_tick_stamp, uint32_t wheel_tick_stamp_ublox,
                        uint32_t wheel_tick_round_trip_stamp) {
     latency_msg1.data = wheel_tick_stamp;
     latency_msg2.data = wheel_tick_stamp_ublox;
@@ -222,8 +227,7 @@ wheel_latency_received(uint32_t wheel_tick_stamp, uint32_t wheel_tick_stamp_ublo
     latency_pub3.publish(latency_msg3);
 }
 
-void
-imu_received(const GpsInterface::ImuState &state) {
+void imu_received(const GpsInterface::ImuState &state) {
     imu_msg.header.stamp = ros::Time::now();
     imu_msg.header.frame_id = "gps";
     imu_msg.header.seq++;

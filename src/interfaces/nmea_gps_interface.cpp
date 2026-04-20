@@ -125,6 +125,11 @@ xbot::driver::gps::NmeaGpsInterface::NmeaGpsInterface(bool verboseLogging, bool 
 
         gps_state_valid_ = gps_state_.position_valid && gps_state_.position_accuracy_valid && gps_state_.motion_heading_valid;
         
+        //GSV
+        gps_state_.tracking_satelites = fix.trackingSatellites;
+        gps_state_.visible_satelites = fix.visibleSatellites();
+        gps_state_.average_snr = fix.averageSNR();
+
         //log(std::string("gps update message ") + std::to_string(messageId), INFO);
 
         if(reportEveryUpdate || gps_state_valid_) {

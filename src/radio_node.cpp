@@ -44,16 +44,17 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length,uint16_t ms
     // Standard RTCM3 — publish as rtcm_msgs/Message
     rtcm_msgs::Message msg;
     msg.header.stamp = ros::Time::now();
+    msg.header.frame_id = std::to_string(msg_type);
     msg.message.assign(frame, frame + length);
     g_rtcm_pub.publish(msg);
-    ROS_INFO("[radio] Published RTCM3 msg type=%u len=%zu", msg_type, length);
+    //ROS_INFO("[radio] Published RTCM3 msg type=%u len=%zu", msg_type, length);
   }
   else {
     // COMMAND packet (0xE3 or other registered preamble)
     std_msgs::UInt8MultiArray msg;
     msg.data.assign(frame, frame + length);
+    ROS_INFO("[radio] Radio CMD preamble=0x%02X type=%u len=%zu", preamble, msg_type, length);
     g_cmd_pub.publish(msg);
-    ROS_INFO("[radio] Published CMD preamble=0x%02X type=%u len=%zu", preamble, msg_type, length);
   }
 }
 
@@ -175,18 +176,18 @@ int main(int argc, char** argv) {
   }
 
   // ── Publishers / subscribers ─────────────────────────────────────────────
-  g_rtcm_pub = nh.advertise<rtcm_msgs::Message>("rtcm", 10);
-  g_cmd_pub  = nh.advertise<std_msgs::UInt8MultiArray>("radio_cmd", 10);
+  g_rtcm_pub = pnh.advertise<rtcm_msgs::Message>("rtcm", 10);
+  g_cmd_pub  = pnh.advertise<std_msgs::UInt8MultiArray>("radio_cmd", 10);
 
-  ros::Subscriber write_sub = nh.subscribe<std_msgs::UInt8MultiArray>(
-      "/radio_write", 10, on_serial_write,
+  ros::Subscriber write_sub = pnh.subscribe<std_msgs::UInt8MultiArray>(
+      "radio_write", 10, on_serial_write,
       ros::TransportHints().tcpNoDelay(true));
 
   // ── Start background threads ─────────────────────────────────────────────
   std::thread rx_thread(rx_thread_fn, port, baudrate);
   std::thread tx_thread(tx_thread_fn);
 
-  ROS_INFO("[radio] rtcm_serial_node started — port=%s baudrate=%u", port.c_str(), baudrate);
+  ROS_INFO("[radio] rtcm_serial_node started, port=%s, baudrate=%u", port.c_str(), baudrate);
 
   ros::spin();   // blocks here; handles write_sub callbacks on the main thread
 
