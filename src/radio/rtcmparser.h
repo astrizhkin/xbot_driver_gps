@@ -46,7 +46,7 @@ public:
   void feed(uint8_t byte);
 
   void await_e22_rssi(bool await_rssi) { await_e22_rssi_.exchange(await_rssi); };
-  bool is_await_e22_rssi() { await_e22_rssi_.load() };
+  bool is_await_e22_rssi() { return await_e22_rssi_.load(); };
   uint32_t valid_count()   const { return valid_count_;   }
   uint32_t invalid_count() const { return invalid_count_; }
 
