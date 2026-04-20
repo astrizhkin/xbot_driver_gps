@@ -45,10 +45,15 @@ public:
   /** Feed a single byte. */
   void feed(uint8_t byte);
 
+  void await_e22_rssi(bool await_rssi) { await_e22_rssi_.exchange(await_rssi); };
+  bool is_await_e22_rssi() { await_e22_rssi_.load() };
   uint32_t valid_count()   const { return valid_count_;   }
   uint32_t invalid_count() const { return invalid_count_; }
 
 private:
+  static constexpr uint8_t RSSI_RESPONSE_PREAMBLE = 0xC1;
+  std::atomic<bool> await_e22_rssi_ { false };
+
   enum class State : uint8_t
   {
     WAIT_PREAMBLE,
@@ -58,6 +63,9 @@ private:
     CRC_0,
     CRC_1,
     CRC_2,
+    E22_ADDR,
+    E22_LEN,
+    E22_DATA,
   };
 
   void process_byte(uint8_t byte);

@@ -105,6 +105,12 @@ void RTCMParser::process_byte(uint8_t byte)
         update_crc(byte);
         frame_buf_[frame_len_++] = byte;
         state_                   = State::LENGTH_H;
+      } else if(byte==RSSI_RESPONSE_PREAMBLE && is_await_e22_rssi()) {
+        active_preamble_         = byte;
+        calc_crc_                = 0;
+        frame_len_               = 0;
+        frame_buf_[frame_len_++] = byte;
+        state_                    = State::E22_ADDR;
       }
       // Non-preamble bytes are silently discarded
       break;
@@ -180,5 +186,33 @@ void RTCMParser::process_byte(uint8_t byte)
       state_ = State::WAIT_PREAMBLE;
       break;
     }
+
+    // Frame layout: 0xC1  addr  len  data[len]
+    case State::E22_ADDR:
+      frame_buf_[frame_len_++] = byte;
+      state_                   = State::E22_LEN;
+      break;
+    case State::E22_LEN:
+      frame_buf_[frame_len_++] = byte;
+      msg_length_              = byte;
+      if (msg_length_ == 0) {
+        if (callback_) {
+          callback_(active_preamble_, frame_buf_, frame_len_, 0);
+        }
+        state_ = State::WAIT_PREAMBLE;
+      } else {
+        state_= State::E22_DATA;
+      }
+      break;
+
+    case State::E22_DATA:
+      frame_buf_[frame_len_++] = byte;
+      if (frame_len_ >= msg_length_+3) {
+        if (callback_) {
+          callback_(active_preamble_, frame_buf_, frame_len_, 0);
+        }
+        state_ = State::WAIT_PREAMBLE;
+      }
+      break;
   } // switch
 }
