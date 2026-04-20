@@ -95,7 +95,16 @@ add_executable(driver_gps_node
         src/interfaces/ubx_datatypes.h
 )
 
+add_executable(radio_node
+        src/radio_node.cpp
+        src/radio/rtcmparser.h
+        src/radio/rtcmparser.cpp
+)
+
 add_dependencies(driver_gps_node ${catkin_EXPORTED_TARGETS} ${${PROJECT_NAME}_EXPORTED_TARGETS})
 add_dependencies(driver_gps_node ${EP_NEMATODE})
+add_dependencies(radio_node ${catkin_EXPORTED_TARGETS} ${${PROJECT_NAME}_EXPORTED_TARGETS})
+
 ExternalProject_Get_property(${EP_NEMATODE} BINARY_DIR)
 target_link_libraries(driver_gps_node ${catkin_LIBRARIES} ${GeographicLib_LIBRARIES} ${BINARY_DIR}/libNemaTode.a)
+target_link_libraries(radio_node ${catkin_LIBRARIES})
