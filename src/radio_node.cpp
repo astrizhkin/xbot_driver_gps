@@ -164,7 +164,7 @@ int main(int argc, char** argv) {
   ros::init(argc, argv, "rtcm_serial_node");
   ros::NodeHandle nh;
   ros::NodeHandle pnh("~");
-rtcm_serial
+
   // ── Parameters ──────────────────────────────────────────────────────────
   const std::string port     = pnh.param("serial_port", std::string(""));
   const uint32_t    baudrate = static_cast<uint32_t>(pnh.param("baudrate", 57600));
