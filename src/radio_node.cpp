@@ -6,6 +6,7 @@
 
 #include <ros/ros.h>
 #include <rtcm_msgs/Message.h>
+#include <std_msgs/Float32.h>
 #include <std_msgs/UInt8MultiArray.h>
 
 #include <serial/serial.h>
@@ -40,6 +41,7 @@ static ros::Time         g_rssi_sent_at;          // written/read on main thread
 // ── Globals (node-scoped) ──────────────────────────────────────────────────
 static ros::Publisher          g_rtcm_pub;
 static ros::Publisher          g_cmd_pub;
+static ros::Publisher          g_rssi_pub;
 
 static serial::Serial          g_serial;
 static std::atomic<bool>       g_stopped { false };
@@ -92,8 +94,16 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length,uint16_t ms
 
     const int ambient_dbm     = rssi_to_dbm(frame[3]);  // reg 0x00
     const int last_packet_dbm = rssi_to_dbm(frame[4]);  // reg 0x01
+    //absolute minimum for signal -131dBm (E22-Txxx22S)
+    //strength = last_packet_dbm + 131;
 
     ROS_INFO("[radio] RSSI - ambient: %d dBm,  last packet: %d dBm", ambient_dbm, last_packet_dbm);
+
+    if (g_rssi_pub.getNumSubscribers() > 0) {
+      std_msgs::Float32 msg;
+      msg.data = static_cast<float>(last_packet_dbm);
+      g_rssi_pub.publish(msg);
+    }
     return;
   }
   if (preamble == 0xD3) {
@@ -251,6 +261,7 @@ int main(int argc, char** argv) {
   // ── Publishers / subscribers ─────────────────────────────────────────────
   g_rtcm_pub = pnh.advertise<rtcm_msgs::Message>("rtcm", 10);
   g_cmd_pub  = pnh.advertise<std_msgs::UInt8MultiArray>("radio_cmd", 10);
+  g_rssi_pub = pnh.advertise<std_msgs::Float32>("rssi", 10);
 
   ros::Subscriber write_sub = pnh.subscribe<std_msgs::UInt8MultiArray>(
       "radio_write", 10, on_serial_write,
