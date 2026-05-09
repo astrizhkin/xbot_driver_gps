@@ -49,6 +49,7 @@ public:
   bool is_await_e22_rssi() { return await_e22_rssi_.load(); };
   uint32_t valid_count()   const { return valid_count_;   }
   uint32_t invalid_count() const { return invalid_count_; }
+  bool is_idle()           const { return state_ == State::WAIT_PREAMBLE; }
 
 private:
   static constexpr uint8_t RSSI_RESPONSE_PREAMBLE = 0xC1;

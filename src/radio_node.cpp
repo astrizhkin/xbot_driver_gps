@@ -29,14 +29,14 @@ static constexpr uint8_t RSSI_RESPONSE_PREAMBLE = 0xC1;
 // dBm conversion per spec: dBm = -(256 - RSSI)
 static inline int rssi_to_dbm(uint8_t rssi) { return -(256 - static_cast<int>(rssi)); }
 
-// ── RSSI polling state ─────────────────────────────────────────────────────
-//
-// 0xC1 is always registered in the parser to keep the parser simple.
-// g_await_rssi is the gate: on_packet() only acts on a 0xC1 frame when true.
-// Set on the main thread (timer), cleared on rx_thread (on_packet or error).
-// std::atomic gives the necessary cross-thread visibility without a mutex.
-//
+// Reactive RSSI polling: scheduleRSSI() is called on every D3/E3 packet.
+// Checks if ≥5s elapsed since last RSSI send. If so, schedules a 100ms
+// one-shot timer. When the timer fires, the RSSI command is enqueued.
+// If more D3/E3 packets arrive during the 100ms window, the timer is
+// rescheduled (createTimer replaces the previous pending timer).
+static double g_rssi_period;
 static ros::Time         g_rssi_sent_at;          // written/read on main thread only
+static ros::Timer             g_rssi_timer;
 
 // ── Globals (node-scoped) ──────────────────────────────────────────────────
 static ros::Publisher          g_rtcm_pub;
@@ -55,7 +55,8 @@ static std::condition_variable g_tx_cv;
 void rx_thread_fn(const std::string& port, uint32_t baudrate);
 void tx_thread_fn();
 void on_serial_write(const std_msgs::UInt8MultiArray::ConstPtr& msg);
-void on_packet(uint8_t preamble, const uint8_t* frame, size_t length,uint16_t msg_type);
+void on_packet(uint8_t preamble, const uint8_t* frame, size_t length, uint16_t msg_type);
+void scheduleRSSI();
 
 RTCMParser parser({0xD3, 0xE3}, on_packet);
 
@@ -113,7 +114,7 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length,uint16_t ms
     msg.header.frame_id = std::to_string(msg_type);
     msg.message.assign(frame, frame + length);
     g_rtcm_pub.publish(msg);
-    //ROS_INFO("[radio] Published RTCM3 msg type=%u len=%zu", msg_type, length);
+    scheduleRSSI();
     return;
   }
   if(preamble == 0xE3){
@@ -121,14 +122,19 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length,uint16_t ms
     msg.data.assign(frame, frame + length);
     ROS_INFO("[radio] Radio CMD preamble=0x%02X type=%u len=%zu", preamble, msg_type, length);
     g_cmd_pub.publish(msg);
+    scheduleRSSI();
     return;
   }
 }
 
-// ── RSSI poll timer (fires on main thread via ros::spin) ───────────────────
+// ── RSSI poll timer (fires in 100ms after last packed received) ───
 void on_rssi_timer(const ros::TimerEvent&) {
   if (!g_serial.isOpen()) {
     ROS_WARN("[radio] RSSI poll skipped - port not open");
+    return;
+  }
+  if(!parser.is_idle()) {
+    ROS_WARN("[radio] RSSI poll skipped - parser is not idle");
     return;
   }
 
@@ -143,6 +149,15 @@ void on_rssi_timer(const ros::TimerEvent&) {
   g_rssi_sent_at = ros::Time::now();
   enqueue_tx(RSSI_CMD, sizeof(RSSI_CMD));
   //ROS_INFO("[radio] RSSI query sent");
+}
+
+void scheduleRSSI() {
+  if((ros::Time::now() - g_rssi_sent_at).toSec()<g_rssi_period) {
+    return;
+  }
+  g_rssi_timer.stop();
+  g_rssi_timer.setPeriod(ros::Duration(0.1));
+  g_rssi_timer.start();
 }
 
 // ── RX thread ──────────────────────────────────────────────────────────────
@@ -251,7 +266,7 @@ int main(int argc, char** argv) {
   // ── Parameters ──────────────────────────────────────────────────────────
   const std::string port     = pnh.param("serial_port", std::string(""));
   const uint32_t    baudrate = static_cast<uint32_t>(pnh.param("baudrate", 57600));
-  const double      rssi_period = pnh.param("rssi_poll_period", 5.0);   // seconds
+  g_rssi_period = pnh.param("rssi_poll_period", 5.0);   // seconds
 
   if (port.empty() || baudrate == 0) {
     ROS_FATAL("[radio] serial_port and baudrate must be set");
@@ -267,16 +282,15 @@ int main(int argc, char** argv) {
       "radio_write", 10, on_serial_write,
       ros::TransportHints().tcpNoDelay(true));
 
-  // Repeating timer fires on the main thread — no extra locking needed
-  // for g_rssi_sent_at which is only touched in timer callbacks
-  ros::Timer rssi_timer = nh.createTimer(ros::Duration(rssi_period), on_rssi_timer);
+  // One shot timer for 100ms to request RSSI started after packet arrives
+  g_rssi_timer = nh.createTimer(ros::Duration(0.1), on_rssi_timer, true, false);
 
   // ── Start background threads ─────────────────────────────────────────────
   std::thread rx_thread(rx_thread_fn, port, baudrate);
   std::thread tx_thread(tx_thread_fn);
 
   ROS_INFO("[radio] Started: port=%s baudrate=%u rssi_poll=%.1fs",
-           port.c_str(), baudrate, rssi_period);
+           port.c_str(), baudrate, g_rssi_period);
 
   ros::spin();   // blocks here; handles write_sub callbacks on the main thread
 

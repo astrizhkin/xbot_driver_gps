@@ -187,10 +187,15 @@ void RTCMParser::process_byte(uint8_t byte)
       break;
     }
 
-    // Frame layout: 0xC1  addr  len  data[len]
+    // E22 RSSI response is always exactly 5 bytes: 0xC1 + addr + len + 2 data
     case State::E22_ADDR:
       frame_buf_[frame_len_++] = byte;
-      state_                   = State::E22_LEN;
+      //we expect only addr = 0
+      if(byte!=0) {
+        state_ = State::WAIT_PREAMBLE;
+      }else{
+        state_ = State::E22_LEN;
+      }
       break;
     case State::E22_LEN:
       frame_buf_[frame_len_++] = byte;
@@ -200,11 +205,13 @@ void RTCMParser::process_byte(uint8_t byte)
           callback_(active_preamble_, frame_buf_, frame_len_, 0);
         }
         state_ = State::WAIT_PREAMBLE;
+      //we expect only msg length = 2
+      } if(msg_length_ != 2) {
+        state_ = State::WAIT_PREAMBLE;
       } else {
         state_= State::E22_DATA;
       }
       break;
-
     case State::E22_DATA:
       frame_buf_[frame_len_++] = byte;
       if (frame_len_ >= msg_length_+3) {
