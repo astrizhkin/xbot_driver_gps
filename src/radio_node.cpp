@@ -17,7 +17,7 @@
 static constexpr size_t  READ_CHUNK      = 512;   ///< bytes per serial::read call
 static constexpr int     READ_TIMEOUT_MS = 100;   ///< serial read timeout (ms)
 static constexpr int     RECONNECT_DELAY_S = 1;   ///< pause between reconnect attempts
-static constexpr double  RSSI_POLL_DELAY = 0.15;
+static constexpr double  RSSI_POLL_DELAY = 0.2;
 
 // RSSI query command: C0 C1 C2 C3 + start_addr(0x00) + read_length(0x02)
 // reads two registers: 0x00 = ambient noise RSSI, 0x01 = last-packet RSSI
