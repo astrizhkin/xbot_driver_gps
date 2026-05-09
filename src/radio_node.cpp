@@ -17,6 +17,7 @@
 static constexpr size_t  READ_CHUNK      = 512;   ///< bytes per serial::read call
 static constexpr int     READ_TIMEOUT_MS = 100;   ///< serial read timeout (ms)
 static constexpr int     RECONNECT_DELAY_S = 1;   ///< pause between reconnect attempts
+static constexpr double  RSSI_POLL_DELAY = 0.15;
 
 // RSSI query command: C0 C1 C2 C3 + start_addr(0x00) + read_length(0x02)
 // reads two registers: 0x00 = ambient noise RSSI, 0x01 = last-packet RSSI
@@ -127,7 +128,7 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length,uint16_t ms
   }
 }
 
-// ── RSSI poll timer (fires in 100ms after last packed received) ───
+// ── RSSI poll timer (fires in 100ms after last packet received) ───
 void on_rssi_timer(const ros::TimerEvent&) {
   if (!g_serial.isOpen()) {
     ROS_WARN("[radio] RSSI poll skipped - port not open");
@@ -152,11 +153,11 @@ void on_rssi_timer(const ros::TimerEvent&) {
 }
 
 void scheduleRSSI() {
+  g_rssi_timer.stop();
   if((ros::Time::now() - g_rssi_sent_at).toSec()<g_rssi_period) {
     return;
   }
-  g_rssi_timer.stop();
-  g_rssi_timer.setPeriod(ros::Duration(0.1));
+  g_rssi_timer.setPeriod(ros::Duration(RSSI_POLL_DELAY));
   g_rssi_timer.start();
 }
 
@@ -283,7 +284,7 @@ int main(int argc, char** argv) {
       ros::TransportHints().tcpNoDelay(true));
 
   // One shot timer for 100ms to request RSSI started after packet arrives
-  g_rssi_timer = nh.createTimer(ros::Duration(0.1), on_rssi_timer, true, false);
+  g_rssi_timer = nh.createTimer(ros::Duration(RSSI_POLL_DELAY), on_rssi_timer, true, false);
 
   // ── Start background threads ─────────────────────────────────────────────
   std::thread rx_thread(rx_thread_fn, port, baudrate);
