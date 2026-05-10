@@ -77,6 +77,11 @@ namespace xbot {
                     uint16_t tracking_satelites;
                     uint16_t visible_satelites;
                     double average_snr;
+
+                    uint16_t pubx_tracking_satelites;
+                    uint16_t pubx_used_satelites;
+                    double pubx_average_tracking_snr;
+                    double pubx_average_used_snr;
                 };
 
                 struct ImuState {
