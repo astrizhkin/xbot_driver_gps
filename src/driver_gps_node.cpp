@@ -212,11 +212,11 @@ void gps_state_received(const GpsInterface::GpsState &state) {
     xbot_pose_pub.publish(pose_result);
     pose_pub.publish(pose_result.pose);
     double rtcm_age = (ros::Time::now() - g_last_rtcm).toSec();
-    ROS_INFO_THROTTLE(10,"[driver_gps] GNSS: fix %d, rtk %d, (GSV %d/%d, avgSNR %f) (PUBX %d/%d, avgSNR %f/%f), RTCM age %fs",
+    ROS_INFO_THROTTLE(10,"[driver_gps] GNSS: fix %d, rtk %d, (GSV %d/%d, avgSNR %f) (PUBX %d/%d, avgSNR %f/%f), RTCM received age %fs, DGNSS age %fs",
         state.fix_type,state.rtk_type, 
         state.tracking_satelites, state.visible_satelites, state.average_snr,
         state.pubx_used_satelites, state.pubx_tracking_satelites, state.pubx_average_used_snr,state.pubx_average_tracking_snr,
-        rtcm_age);
+        rtcm_age,state.diff_age);
     // send feedback to VRS
     generate_nmea(state.pos_lat, state.pos_lon);
 }

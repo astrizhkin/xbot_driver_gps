@@ -42,7 +42,8 @@ namespace xbot {
                     enum RTKType {
                         RTK_NONE = 0,
                         RTK_FLOAT = 1,
-                        RTK_FIX = 2
+                        RTK_FIX = 2,
+                        DGNSS = 3
                     };
 
                     uint64_t epoch_ms;
@@ -73,6 +74,8 @@ namespace xbot {
 
                     FixType fix_type;
                     RTKType rtk_type;
+
+                    double diff_age;
 
                     uint16_t tracking_satelites;
                     uint16_t visible_satelites;

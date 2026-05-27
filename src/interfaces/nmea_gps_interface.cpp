@@ -89,10 +89,16 @@ xbot::driver::gps::NmeaGpsInterface::NmeaGpsInterface(bool verboseLogging, bool 
             case 4:
                 gps_state_.rtk_type = GpsState::RTK_FIX;
                 break;
+            case 2:
+                gps_state_.rtk_type = GpsState::DGNSS;
+                break;
             default:
                 gps_state_.rtk_type = GpsState::RTK_NONE;
                 break;
         }
+
+        //GGA/diffAge
+        gps_state_.diff_age = fix.diffAge;
 
         //GGA/latitude,longitude,altitude
         double e, n;

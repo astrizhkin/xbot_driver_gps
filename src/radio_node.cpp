@@ -99,7 +99,7 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length,uint16_t ms
     //absolute minimum for signal -131dBm (E22-Txxx22S)
     //strength = last_packet_dbm + 131;
 
-    ROS_INFO("[radio] RSSI - ambient: %d dBm,  last packet: %d dBm", ambient_dbm, last_packet_dbm);
+    ROS_INFO("[radio] RSSI ambient: %d dBm, last packet: %d dBm, RTCM3/CMD invalid: %d, valid: %d", ambient_dbm, last_packet_dbm,parser.invalid_count(),parser.valid_count());
 
     if (g_rssi_pub.getNumSubscribers() > 0) {
       std_msgs::Float32 msg;
