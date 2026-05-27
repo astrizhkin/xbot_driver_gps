@@ -109,7 +109,7 @@ xbot::driver::gps::NmeaGpsInterface::NmeaGpsInterface(bool verboseLogging, bool 
         gps_state_.position_valid = GGA_ms==last_ms; //if latitude, longitude, altitude from last epoch
         gps_state_.pos_e = mode_ == GpsInterface::ABSOLUTE ? e - datum_e_ : e;
         gps_state_.pos_n = mode_ == GpsInterface::ABSOLUTE ? n - datum_n_ : n;
-        gps_state_.pos_u = mode_ == GpsInterface::ABSOLUTE ? fix.altitude - datum_u_ : fix.altitude;
+        gps_state_.pos_u = mode_ == GpsInterface::ABSOLUTE ? fix.altitude + fix.geoid_separation - datum_u_ : fix.altitude  + fix.geoid_separation;
 
         //GST/deviation or GSA/dilution or GGA/quality
         gps_state_.position_accuracy_valid = GST_ms==last_ms && GSA_ms==last_ms && GGA_ms == last_ms;
