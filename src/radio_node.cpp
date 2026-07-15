@@ -283,6 +283,10 @@ int main(int argc, char** argv) {
       "radio_write", 10, on_serial_write,
       ros::TransportHints().tcpNoDelay(true));
 
+  ros::Subscriber e3_write_sub = pnh.subscribe<std_msgs::UInt8MultiArray>(
+      "e3_write", 10, on_serial_write,
+      ros::TransportHints().tcpNoDelay(true));
+
   // One shot timer for 100ms to request RSSI started after packet arrives
   g_rssi_timer = nh.createTimer(ros::Duration(RSSI_POLL_DELAY), on_rssi_timer, true, false);
 
