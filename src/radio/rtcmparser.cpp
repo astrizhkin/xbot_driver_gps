@@ -130,7 +130,12 @@ void RTCMParser::process_byte(uint8_t byte)
       msg_length_             |= byte;
       payload_count_           = 0;
       msg_type_                = 0;
-      state_ = (msg_length_ == 0) ? State::CRC_0 : State::PAYLOAD;
+      if (active_preamble_ == 0xE3) {
+        e3_sender_id_ = 0;
+        state_ = (msg_length_ == 0) ? State::E3_CRC_0 : State::E3_SENDER_H;
+      } else {
+        state_ = (msg_length_ == 0) ? State::CRC_0 : State::PAYLOAD;
+      }
       break;
 
     // ── Payload bytes ──────────────────────────────────────────────────────
@@ -221,5 +226,67 @@ void RTCMParser::process_byte(uint8_t byte)
         state_ = State::WAIT_PREAMBLE;
       }
       break;
+
+    // ── E3 (0xE3) frames — SENDER_ID + KV data ─────────────────────────────
+    case State::E3_SENDER_H:
+      update_crc(byte);
+      frame_buf_[frame_len_++] = byte;
+      e3_sender_id_ = static_cast<uint16_t>(byte) << 8;
+      state_ = State::E3_SENDER_L;
+      break;
+
+    case State::E3_SENDER_L:
+      update_crc(byte);
+      frame_buf_[frame_len_++] = byte;
+      e3_sender_id_ |= byte;
+      payload_count_ = 0;
+      state_ = (msg_length_ == 0) ? State::E3_CRC_0 : State::E3_PAYLOAD;
+      break;
+
+    case State::E3_PAYLOAD:
+      update_crc(byte);
+      frame_buf_[frame_len_++] = byte;
+      // Log the first KV key for debugging
+      if (payload_count_ == 0) {
+        msg_type_ = static_cast<uint16_t>(byte) << 8;
+      }
+      else if (payload_count_ == 1) {
+        msg_type_ |= byte;
+      }
+      if (++payload_count_ >= msg_length_) {
+        state_ = State::E3_CRC_0;
+      }
+      break;
+
+    case State::E3_CRC_0:
+      recv_crc_                = static_cast<uint32_t>(byte) << 16;
+      frame_buf_[frame_len_++] = byte;
+      state_                   = State::E3_CRC_1;
+      break;
+
+    case State::E3_CRC_1:
+      recv_crc_               |= static_cast<uint32_t>(byte) << 8;
+      frame_buf_[frame_len_++] = byte;
+      state_                   = State::E3_CRC_2;
+      break;
+
+    case State::E3_CRC_2: {
+      recv_crc_               |= static_cast<uint32_t>(byte);
+      frame_buf_[frame_len_++] = byte;
+
+      if (calc_crc_ == recv_crc_) {
+        ++valid_count_;
+        if (callback_) {
+          callback_(active_preamble_, frame_buf_, frame_len_, e3_sender_id_);
+        }
+      } else {
+        ++invalid_count_;
+        ROS_WARN("[RTCMParser] CRC mismatch: preamble=0x%02X calc=0x%06X recv=0x%06X type=%u payload_len=%u",
+                 active_preamble_, calc_crc_, recv_crc_, msg_type_, msg_length_);
+      }
+
+      state_ = State::WAIT_PREAMBLE;
+      break;
+    }
   } // switch
 }

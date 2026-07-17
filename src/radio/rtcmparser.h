@@ -67,6 +67,13 @@ private:
     E22_ADDR,
     E22_LEN,
     E22_DATA,
+    // E3 (0xE3) specific states — has SENDER_ID field after length
+    E3_SENDER_H,
+    E3_SENDER_L,
+    E3_PAYLOAD,
+    E3_CRC_0,
+    E3_CRC_1,
+    E3_CRC_2,
   };
 
   void process_byte(uint8_t byte);
@@ -90,9 +97,10 @@ private:
   uint32_t recv_crc_       { 0 };
   uint32_t valid_count_    { 0 };
   uint32_t invalid_count_  { 0 };
+  uint16_t e3_sender_id_   { 0 };
 
-  // Max frame: preamble(1) + header(2) + payload(1023) + CRC(3) = 1029 bytes
-  static constexpr size_t MAX_FRAME_SIZE = 1029;
+  // Max frame: preamble(1) + header(2) + sender_id(2, E3 only) + payload(1023) + CRC(3) = 1031 bytes
+  static constexpr size_t MAX_FRAME_SIZE = 1031;
   uint8_t frame_buf_[MAX_FRAME_SIZE];
   size_t  frame_len_ { 0 };
 

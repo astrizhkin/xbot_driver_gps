@@ -121,7 +121,7 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length,uint16_t ms
   if(preamble == 0xE3){
     std_msgs::UInt8MultiArray msg;
     msg.data.assign(frame, frame + length);
-    ROS_INFO("[radio] Radio CMD preamble=0x%02X type=%u len=%zu", preamble, msg_type, length);
+    ROS_INFO("[radio] E3 frame sender=0x%04X len=%zu", msg_type, length);
     g_cmd_pub.publish(msg);
     scheduleRSSI();
     return;
