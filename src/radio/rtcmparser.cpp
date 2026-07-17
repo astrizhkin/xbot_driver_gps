@@ -130,7 +130,12 @@ void RTCMParser::process_byte(uint8_t byte)
       msg_length_             |= byte;
       payload_count_           = 0;
       msg_type_                = 0;
-      state_ = (msg_length_ == 0) ? State::CRC_0 : State::PAYLOAD;
+      if (active_preamble_ == 0xE3) {
+        e3_sender_id_ = 0;
+        state_ = (msg_length_ == 0) ? State::CRC_0 : State::E3_SENDER_H;
+      } else {
+        state_ = (msg_length_ == 0) ? State::CRC_0 : State::PAYLOAD;
+      }
       break;
 
     // ── Payload bytes ──────────────────────────────────────────────────────
@@ -175,7 +180,8 @@ void RTCMParser::process_byte(uint8_t byte)
         //ROS_INFO("[RTCMParser] Valid frame: preamble=0x%02X type=%u payload_len=%u",
         //          active_preamble_, msg_type_, msg_length_);
         if (callback_) {
-          callback_(active_preamble_, frame_buf_, frame_len_, msg_type_);
+          uint16_t info = (active_preamble_ == 0xE3) ? e3_sender_id_ : msg_type_;
+          callback_(active_preamble_, frame_buf_, frame_len_, info);
         }
       } else {
         ++invalid_count_;
@@ -221,5 +227,37 @@ void RTCMParser::process_byte(uint8_t byte)
         state_ = State::WAIT_PREAMBLE;
       }
       break;
+
+    // ── E3 (0xE3) frames — SENDER_ID + KV data ─────────────────────────────
+    case State::E3_SENDER_H:
+      update_crc(byte);
+      frame_buf_[frame_len_++] = byte;
+      e3_sender_id_ = static_cast<uint16_t>(byte) << 8;
+      state_ = State::E3_SENDER_L;
+      break;
+
+    case State::E3_SENDER_L:
+      update_crc(byte);
+      frame_buf_[frame_len_++] = byte;
+      e3_sender_id_ |= byte;
+      payload_count_ = 0;
+      state_ = (msg_length_ == 0) ? State::CRC_0 : State::E3_PAYLOAD;
+      break;
+
+    case State::E3_PAYLOAD:
+      update_crc(byte);
+      frame_buf_[frame_len_++] = byte;
+      // Log the first KV key for debugging
+      if (payload_count_ == 0) {
+        msg_type_ = static_cast<uint16_t>(byte) << 8;
+      }
+      else if (payload_count_ == 1) {
+        msg_type_ |= byte;
+      }
+      if (++payload_count_ >= msg_length_) {
+        state_ = State::CRC_0;
+      }
+      break;
+
   } // switch
 }
