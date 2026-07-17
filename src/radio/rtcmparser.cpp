@@ -258,6 +258,5 @@ void RTCMParser::process_byte(uint8_t byte)
         state_ = State::CRC_0;
       }
       break;
-
   } // switch
 }
