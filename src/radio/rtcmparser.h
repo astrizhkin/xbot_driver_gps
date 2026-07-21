@@ -29,15 +29,6 @@ public:
                                             size_t         length,
                                             uint16_t       msg_type)>;
 
-  /**
-   * Construct the parser with a set of recognised preambles and a single
-   * shared callback.  Any byte NOT in the preamble list is silently discarded
-   * while the parser is waiting for a frame start.
-   *
-   * Example:
-   *   RTCMParser parser({0xD3, 0xE3}, my_callback);
-   */
-  RTCMParser(std::initializer_list<uint8_t> preambles, PacketCallback callback);
 
   /** Feed a buffer of bytes into the parser. */
   void feed(const uint8_t* data, size_t length);
@@ -51,6 +42,16 @@ public:
   uint32_t invalid_count() const { return invalid_count_; }
   bool is_idle()           const { return state_ == State::WAIT_PREAMBLE; }
   bool is_idle_at_least(uint32_t ms) const;
+
+  /**
+   * Init the parser with a set of recognised preambles and a single
+   * shared callback.  Any byte NOT in the preamble list is silently discarded
+   * while the parser is waiting for a frame start.
+   *
+   * Example:
+   *   init({0xD3, 0xE3}, my_callback);
+   */
+  void init(std::initializer_list<uint8_t> preambles, PacketCallback callback);
 
 private:
   static constexpr uint8_t RSSI_RESPONSE_PREAMBLE = 0xC1;

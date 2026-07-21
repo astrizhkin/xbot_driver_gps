@@ -64,7 +64,7 @@ void on_tx_e3_payload(const std_msgs::UInt8MultiArray::ConstPtr& msg);
 void on_packet(uint8_t preamble, const uint8_t* frame, size_t length, uint16_t msg_type);
 void scheduleRSSI();
 
-RTCMParser parser({0xD3, 0xE3}, on_packet);
+RTCMParser parser;
 
 
 // ── TX helper — enqueue bytes and wake tx_thread ───────────────────────────
@@ -328,6 +328,8 @@ int main(int argc, char** argv) {
   const uint32_t    baudrate = pnh.param("baudrate", 57600);
   g_rssi_period = pnh.param("rssi_poll_period", 5.0);   // seconds
   g_tx_idle_delay_ms = pnh.param("tx_idle_delay_ms", 150); // milliseconds
+
+  parser.init({0xD3, 0xE3}, on_packet);
 
   if (port.empty() || baudrate == 0) {
     ROS_FATAL("[radio] serial_port and baudrate must be set");
