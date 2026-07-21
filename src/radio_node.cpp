@@ -38,7 +38,7 @@ static inline int rssi_to_dbm(uint8_t rssi) { return -(256 - static_cast<int>(rs
 static double g_rssi_period;
 static ros::Time         g_rssi_sent_at;          // written/read on main thread only
 static ros::Timer             g_rssi_timer;
-static double tx_idle_delay_ms;                   // ms to wait for parser idle before TX
+static uint32_t g_tx_idle_delay_ms;               // ms to wait for parser idle before TX
 
 // ── Globals (node-scoped) ──────────────────────────────────────────────────
 static ros::Publisher          g_rtcm_pub;
@@ -272,7 +272,7 @@ void tx_thread_fn() {
     // Wait for parser to be idle long enough before transmitting
 
     ros::Time wait_start = ros::Time::now();
-    while (!g_stopped && !parser.is_idle_at_least(static_cast<uint32_t>(tx_idle_delay_ms))) {
+    while (!g_stopped && !parser.is_idle_at_least(g_tx_idle_delay_ms)) {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
 
@@ -327,7 +327,7 @@ int main(int argc, char** argv) {
   const std::string port     = pnh.param("serial_port", std::string(""));
   const uint32_t    baudrate = static_cast<uint32_t>(pnh.param("baudrate", 57600));
   g_rssi_period = pnh.param("rssi_poll_period", 5.0);   // seconds
-  tx_idle_delay_ms = pnh.param("tx_idle_delay_ms", 75.0); // milliseconds
+  g_tx_idle_delay_ms = static_cast<uint32_t>(pnh.param("tx_idle_delay_ms", 75.0)); // milliseconds
 
   if (port.empty() || baudrate == 0) {
     ROS_FATAL("[radio] serial_port and baudrate must be set");
@@ -371,8 +371,8 @@ int main(int argc, char** argv) {
   std::thread rx_thread(rx_thread_fn, port, baudrate);
   std::thread tx_thread(tx_thread_fn);
 
-  ROS_INFO("[radio] Started: port=%s baudrate=%u e3_sender=0x%04X rssi_poll=%.1fs",
-           port.c_str(), baudrate, g_e3_sender_id, g_rssi_period);
+  ROS_INFO("[radio] Started: port=%s baudrate=%u e3_sender=0x%04X rssi_poll=%.1fs tx_delay=%u",
+           port.c_str(), baudrate, g_e3_sender_id, g_rssi_period,g_tx_idle_delay_ms);
 
   ros::spin();   // blocks here; handles write_sub callbacks on the main thread
 
