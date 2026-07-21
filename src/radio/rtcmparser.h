@@ -50,6 +50,7 @@ public:
   uint32_t valid_count()   const { return valid_count_;   }
   uint32_t invalid_count() const { return invalid_count_; }
   bool is_idle()           const { return state_ == State::WAIT_PREAMBLE; }
+  bool is_idle_at_least(uint32_t ms) const;
 
 private:
   static constexpr uint8_t RSSI_RESPONSE_PREAMBLE = 0xC1;
@@ -107,6 +108,7 @@ private:
   size_t  preamble_count_ { 0 };
 
   PacketCallback callback_;
+  ros::Time idle_since_;
 
   static const uint32_t CRC_LOOKUP[256];
 };

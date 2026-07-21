@@ -38,6 +38,7 @@ static inline int rssi_to_dbm(uint8_t rssi) { return -(256 - static_cast<int>(rs
 static double g_rssi_period;
 static ros::Time         g_rssi_sent_at;          // written/read on main thread only
 static ros::Timer             g_rssi_timer;
+static double tx_idle_delay_ms;                   // ms to wait for parser idle before TX
 
 // ── Globals (node-scoped) ──────────────────────────────────────────────────
 static ros::Publisher          g_rtcm_pub;
@@ -283,6 +284,11 @@ void tx_thread_fn() {
     to_write.swap(g_tx_buf);
     lk.unlock();
 
+    // Wait for parser to be idle long enough before transmitting
+    while (!g_stopped && !parser.is_idle_at_least(static_cast<uint32_t>(tx_idle_delay_ms))) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
     try {
       size_t written = g_serial.write(to_write);
       if (written != to_write.size()) {
@@ -323,6 +329,7 @@ int main(int argc, char** argv) {
   const std::string port     = pnh.param("serial_port", std::string(""));
   const uint32_t    baudrate = static_cast<uint32_t>(pnh.param("baudrate", 57600));
   g_rssi_period = pnh.param("rssi_poll_period", 5.0);   // seconds
+  tx_idle_delay_ms = pnh.param("tx_idle_delay_ms", 75.0); // milliseconds
 
   if (port.empty() || baudrate == 0) {
     ROS_FATAL("[radio] serial_port and baudrate must be set");
