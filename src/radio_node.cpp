@@ -72,7 +72,7 @@ static void enqueue_tx(const uint8_t* data, size_t len) {
   {
     std::lock_guard<std::mutex> lk(g_tx_mutex);
     g_tx_buf.insert(g_tx_buf.end(), data, data + len);
-    if (g_tx_buf.size() > 5000) {
+    if (g_tx_buf.size() > 1000) {
       ROS_WARN_THROTTLE(5, "[radio] TX buffer growing large: %zu bytes", g_tx_buf.size());
     }
   }
@@ -96,17 +96,6 @@ static void enqueue_e3_frame(const uint8_t* payload, size_t payload_len) {
   raw.push_back((crc >> 16) & 0xFF);
   raw.push_back((crc >> 8) & 0xFF);
   raw.push_back(crc & 0xFF);
-
-  // Debug: hex dump E3 frame
-  {
-      std::string hex;
-      for (uint8_t b : raw) {
-          char hb[4];
-          snprintf(hb, sizeof(hb), "%02X ", b);
-          hex += hb;
-      }
-      ROS_INFO("[radio] E3 TX: %s (%zu bytes)", hex.c_str(), raw.size());
-  }
 
   enqueue_tx(raw.data(), raw.size());
 }
@@ -180,10 +169,6 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length, uint16_t m
 
 // ── RSSI poll timer (fires in 100ms after last packet received) ───
 void on_rssi_timer(const ros::TimerEvent&) {
-  if (!g_serial.isOpen()) {
-    ROS_WARN("[radio] RSSI poll skipped - port not open");
-    return;
-  }
   if(!parser.is_idle()) {
     ROS_WARN("[radio] RSSI poll skipped - parser is not idle");
     return;
@@ -285,8 +270,21 @@ void tx_thread_fn() {
     lk.unlock();
 
     // Wait for parser to be idle long enough before transmitting
+
+    ros::Time wait_start = ros::Time::now();
     while (!g_stopped && !parser.is_idle_at_least(static_cast<uint32_t>(tx_idle_delay_ms))) {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+
+    // Debug: hex dump E3 frame
+    {
+        std::string hex;
+        for (uint8_t b : to_write) {
+            char hb[4];
+            snprintf(hb, sizeof(hb), "%02X ", b);
+            hex += hb;
+        }
+        ROS_INFO("[radio] wait %dms, TX: %s (%zu bytes)", (int)(1000*(ros::Time::now() - wait_start).toSec()), hex.c_str(), to_write.size());
     }
 
     try {
