@@ -323,13 +323,11 @@ int main(int argc, char** argv) {
   ros::NodeHandle nh;
   ros::NodeHandle pnh("~");
 
-  ROS_INFO("[radio] Starting");
   // ── Parameters ──────────────────────────────────────────────────────────
   const std::string port     = pnh.param("serial_port", std::string(""));
   const uint32_t    baudrate = pnh.param("baudrate", 57600);
   g_rssi_period = pnh.param("rssi_poll_period", 5.0);   // seconds
-  g_tx_idle_delay_ms = pnh.param("tx_idle_delay_ms", 75); // milliseconds
-  ROS_INFO("[radio] Starting 2");
+  g_tx_idle_delay_ms = pnh.param("tx_idle_delay_ms", 150); // milliseconds
 
   if (port.empty() || baudrate == 0) {
     ROS_FATAL("[radio] serial_port and baudrate must be set");

@@ -45,8 +45,9 @@ const uint32_t RTCMParser::CRC_LOOKUP[256] = {
 // Constructor
 // ---------------------------------------------------------------------------
 RTCMParser::RTCMParser(std::initializer_list<uint8_t> preambles, PacketCallback callback)
-  : callback_(std::move(callback))
 {
+  callback_ = std::move(callback);
+  idle_since_ = ros::Time::now();
   preamble_count_ = 0;
   for (uint8_t p : preambles)
   {
