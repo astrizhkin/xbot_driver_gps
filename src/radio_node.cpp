@@ -325,9 +325,9 @@ int main(int argc, char** argv) {
 
   // ── Parameters ──────────────────────────────────────────────────────────
   const std::string port     = pnh.param("serial_port", std::string(""));
-  const uint32_t    baudrate = static_cast<uint32_t>(pnh.param("baudrate", 57600));
+  const uint32_t    baudrate = pnh.param("baudrate", 57600);
   g_rssi_period = pnh.param("rssi_poll_period", 5.0);   // seconds
-  g_tx_idle_delay_ms = static_cast<uint32_t>(pnh.param("tx_idle_delay_ms", 75.0)); // milliseconds
+  g_tx_idle_delay_ms = pnh.param("tx_idle_delay_ms", 75); // milliseconds
 
   if (port.empty() || baudrate == 0) {
     ROS_FATAL("[radio] serial_port and baudrate must be set");
@@ -372,7 +372,7 @@ int main(int argc, char** argv) {
   std::thread tx_thread(tx_thread_fn);
 
   ROS_INFO("[radio] Started: port=%s baudrate=%u e3_sender=0x%04X rssi_poll=%.1fs tx_delay=%u",
-           port.c_str(), baudrate, g_e3_sender_id, g_rssi_period,g_tx_idle_delay_ms);
+           port.c_str(), baudrate, g_e3_sender_id, g_rssi_period, g_tx_idle_delay_ms);
 
   ros::spin();   // blocks here; handles write_sub callbacks on the main thread
 
