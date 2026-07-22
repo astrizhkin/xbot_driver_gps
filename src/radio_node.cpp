@@ -18,7 +18,6 @@
 static constexpr size_t  READ_CHUNK      = 512;   ///< bytes per serial::read call
 static constexpr int     READ_TIMEOUT_MS = 100;   ///< serial read timeout (ms)
 static constexpr int     RECONNECT_DELAY_S = 1;   ///< pause between reconnect attempts
-static constexpr double  RSSI_POLL_DELAY = 0.2;
 
 // RSSI query command: C0 C1 C2 C3 + start_addr(0x00) + read_length(0x02)
 // reads two registers: 0x00 = ambient noise RSSI, 0x01 = last-packet RSSI
@@ -30,14 +29,8 @@ static constexpr uint8_t RSSI_RESPONSE_PREAMBLE = 0xC1;
 // dBm conversion per spec: dBm = -(256 - RSSI)
 static inline int rssi_to_dbm(uint8_t rssi) { return -(256 - static_cast<int>(rssi)); }
 
-// Reactive RSSI polling: scheduleRSSI() is called on every D3/E3 packet.
-// Checks if ≥5s elapsed since last RSSI send. If so, schedules a 100ms
-// one-shot timer. When the timer fires, the RSSI command is enqueued.
-// If more D3/E3 packets arrive during the 100ms window, the timer is
-// rescheduled (createTimer replaces the previous pending timer).
 static double g_rssi_period;
 static ros::Time         g_rssi_sent_at;          // written/read on main thread only
-static ros::Timer             g_rssi_timer;
 static uint32_t g_tx_idle_delay_ms;               // ms to wait for parser idle before TX
 
 // ── Globals (node-scoped) ──────────────────────────────────────────────────
@@ -47,6 +40,7 @@ static ros::Publisher          g_rssi_pub;
 
 static serial::Serial          g_serial;
 static std::atomic<bool>       g_stopped { false };
+static std::atomic<bool>       g_inject_rssi { false };
 
 // TX queue
 static std::vector<uint8_t>    g_tx_buf;
@@ -167,33 +161,17 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length, uint16_t m
   }
 }
 
-// ── RSSI poll timer (fires in 100ms after last packet received) ───
-void on_rssi_timer(const ros::TimerEvent&) {
-  if(!parser.is_idle()) {
-    ROS_WARN("[radio] RSSI poll skipped - parser is not idle");
-    return;
-  }
-
-  // Warn if the previous request never got a response
-  if (parser.is_await_e22_rssi()) {
-    ROS_WARN("[radio] RSSI response timeout (sent %.2f s ago)",
-             (ros::Time::now() - g_rssi_sent_at).toSec());
-    parser.await_e22_rssi(false);
-  }
-
-  parser.await_e22_rssi(true);
-  g_rssi_sent_at = ros::Time::now();
-  enqueue_tx(RSSI_CMD, sizeof(RSSI_CMD));
-  //ROS_INFO("[radio] RSSI query sent");
-}
-
 void scheduleRSSI() {
-  g_rssi_timer.stop();
   if((ros::Time::now() - g_rssi_sent_at).toSec()<g_rssi_period) {
     return;
   }
-  g_rssi_timer.setPeriod(ros::Duration(RSSI_POLL_DELAY));
-  g_rssi_timer.start();
+  if(parser.is_await_e22_rssi()){
+    ROS_WARN("[radio] RSSI response timeout (sent %.2f s ago)",
+             (ros::Time::now() - g_rssi_sent_at).toSec());
+  }
+  
+  g_inject_rssi.store(true);
+  g_tx_cv.notify_one();
 }
 
 // ── RX thread ──────────────────────────────────────────────────────────────
@@ -254,7 +232,14 @@ void tx_thread_fn() {
 
     // Block until data is queued or we are asked to stop
     g_tx_cv.wait_for(lk, std::chrono::seconds(1),
-                     [] { return !g_tx_buf.empty() || g_stopped.load(); });
+                     [] { return !g_tx_buf.empty() || g_stopped.load() || g_inject_rssi.load(); });
+
+
+    bool inject_rssi = g_inject_rssi.load();
+    if (inject_rssi){
+      g_inject_rssi.store(false);
+      g_tx_buf.insert(g_tx_buf.begin(), RSSI_CMD, RSSI_CMD + sizeof(RSSI_CMD));
+    }
 
     if (g_tx_buf.empty()) continue;
 
@@ -269,11 +254,22 @@ void tx_thread_fn() {
     to_write.swap(g_tx_buf);
     lk.unlock();
 
-    // Wait for parser to be idle long enough before transmitting
-
+    // Wait for parser to be idle max 2000ms before transmitting
+    uint32_t wait_time = 2000;
     ros::Time wait_start = ros::Time::now();
-    while (!g_stopped && !parser.is_idle_at_least(g_tx_idle_delay_ms)) {
+    while (!g_stopped && !parser.is_idle_at_least(g_tx_idle_delay_ms) && wait_time > 0) {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      wait_time-=5;
+    }
+
+    if(!parser.is_idle_at_least(g_tx_idle_delay_ms)){
+      ROS_WARN("[radio] Parser states RX channel is still busy after 2000ms");
+    }
+
+    //set await rssi right before serial write
+    if(inject_rssi) {
+      g_rssi_sent_at = ros::Time::now();
+      parser.await_e22_rssi(true);
     }
 
     // Debug: hex dump E3 frame
@@ -325,9 +321,12 @@ int main(int argc, char** argv) {
 
   // ── Parameters ──────────────────────────────────────────────────────────
   const std::string port     = pnh.param("serial_port", std::string(""));
-  const uint32_t    baudrate = pnh.param("baudrate", 57600);
+  const uint32_t    baudrate = pnh.param("baudrate", 115200);
   g_rssi_period = pnh.param("rssi_poll_period", 5.0);   // seconds
-  g_tx_idle_delay_ms = pnh.param("tx_idle_delay_ms", 150); // milliseconds
+  
+  //safe margin for 128 bytes packet = 75ms
+  //safe margin for 240 bytes packet = 125ms
+  g_tx_idle_delay_ms = pnh.param("tx_idle_delay_ms", 75); // milliseconds
 
   parser.init({0xD3, 0xE3}, on_packet);
 
@@ -365,9 +364,6 @@ int main(int argc, char** argv) {
   ros::Subscriber e3_payload_sub = pnh.subscribe<std_msgs::UInt8MultiArray>(
       "tx_e3_payload", 10, on_tx_e3_payload,
       ros::TransportHints().tcpNoDelay(true));
-
-  // One shot timer for 100ms to request RSSI started after packet arrives
-  g_rssi_timer = nh.createTimer(ros::Duration(RSSI_POLL_DELAY), on_rssi_timer, true, false);
 
   // ── Start background threads ─────────────────────────────────────────────
   std::thread rx_thread(rx_thread_fn, port, baudrate);
