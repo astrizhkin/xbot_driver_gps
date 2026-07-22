@@ -162,9 +162,10 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length, uint16_t m
 }
 
 void scheduleRSSI() {
-  if((ros::Time::now() - g_rssi_sent_at).toSec()<g_rssi_period) {
+  if((ros::Time::now() - g_rssi_sent_at).toSec() < g_rssi_period) {
     return;
   }
+
   if(parser.is_await_e22_rssi()){
     ROS_WARN("[radio] RSSI response timeout (sent %.2f s ago)",
              (ros::Time::now() - g_rssi_sent_at).toSec());
@@ -236,12 +237,8 @@ void tx_thread_fn() {
 
 
     bool inject_rssi = g_inject_rssi.load();
-    if (inject_rssi){
-      g_inject_rssi.store(false);
-      g_tx_buf.insert(g_tx_buf.begin(), RSSI_CMD, RSSI_CMD + sizeof(RSSI_CMD));
-    }
 
-    if (g_tx_buf.empty()) continue;
+    if (g_tx_buf.empty() || !inject_rssi) continue;
 
     if (!g_serial.isOpen()) {
       ROS_WARN_THROTTLE(5, "[radio] TX: serial port not open, dropping %zu bytes", g_tx_buf.size());
@@ -269,7 +266,9 @@ void tx_thread_fn() {
     //set await rssi right before serial write
     if(inject_rssi) {
       g_rssi_sent_at = ros::Time::now();
+      g_inject_rssi.store(false);
       parser.await_e22_rssi(true);
+      g_tx_buf.insert(g_tx_buf.begin(), RSSI_CMD, RSSI_CMD + sizeof(RSSI_CMD));
     }
 
     // Debug: hex dump E3 frame
