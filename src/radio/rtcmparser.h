@@ -1,8 +1,10 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <initializer_list>
+#include <string>
 #include <ros/ros.h>
 
 /**
@@ -107,8 +109,21 @@ private:
   }
 
   void print_stat() {
-    //log timing_stat_ in format ${preamble}=######.#ms
-    //log timing_ in sequence in format ${preamble}=####.#ms
+    std::string stat;
+    for (auto& [prem, t] : timing_stat_) {
+      char buf[32];
+      snprintf(buf, sizeof(buf), "0x%02X=%.1fms ", prem, t.length_ms);
+      stat += buf;
+    }
+    ROS_INFO("[RTCMParser] avg: %s", stat.c_str());
+
+    std::string seq;
+    for (auto& t : timing_) {
+      char buf[16];
+      snprintf(buf, sizeof(buf), "0x%02X=%.1fms ", t.active_premable, t.length_ms);
+      seq += buf;
+    }
+    ROS_INFO("[RTCMParser] seq: %s", seq.c_str());
   }
 
   void record_idle_time(double ms) {
