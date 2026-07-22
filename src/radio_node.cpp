@@ -69,11 +69,11 @@ static size_t tx_buf_size() {
 }
 
 // ── TX helper — enqueue bytes and wake tx_thread ───────────────────────────
-static void enqueue_tx(const std::vector<uint8_t> &packet) 
+static void enqueue_tx(const std::vector<uint8_t> packet) 
 {
   {
     std::lock_guard<std::mutex> lk(g_tx_mutex);
-    g_tx_packet_buf.push_back(packet);
+    g_tx_packet_buf.push_back(std::move(packet));
     size_t buf_size = tx_buf_size();
     if (buf_size > 1000) {
       ROS_WARN_THROTTLE(5, "[radio] TX buffer growing large: %zu bytes", buf_size);
@@ -258,7 +258,7 @@ void tx_thread_fn() {
     }
 
     // Take first packet and release the lock before the (potentially blocking) write
-    std::vector<uint8_t> &to_write = g_tx_packet_buf.front();
+    std::vector<uint8_t> to_write = std::move(g_tx_packet_buf.front());
     g_tx_packet_buf.pop_front();
     lk.unlock();
 
