@@ -44,7 +44,7 @@ const uint32_t RTCMParser::CRC_LOOKUP[256] = {
 void RTCMParser::init(std::initializer_list<uint8_t> preambles, PacketCallback callback)
 {
   callback_ = std::move(callback);
-  idle_since_ = ros::Time::now();
+  switch_state_time_ = ros::Time::now();
   preamble_count_ = 0;
   for (uint8_t p : preambles)
   {
@@ -97,20 +97,18 @@ void RTCMParser::process_byte(uint8_t byte)
     // ── Waiting for any registered preamble ────────────────────────────────
     case State::WAIT_PREAMBLE:
       if (is_preamble(byte)) {
-        idle_since_              = ros::Time::ZERO;
         active_preamble_         = byte;
+        set_parser_state(State::LENGTH_H);
         calc_crc_                = 0;
         frame_len_               = 0;
         update_crc(byte);
         frame_buf_[frame_len_++] = byte;
-        state_                   = State::LENGTH_H;
       } else if(byte==RSSI_RESPONSE_PREAMBLE && is_await_e22_rssi()) {
-        idle_since_              = ros::Time::ZERO;
         active_preamble_         = byte;
+        set_parser_state(State::E22_ADDR);
         calc_crc_                = 0;
         frame_len_               = 0;
         frame_buf_[frame_len_++] = byte;
-        state_                    = State::E22_ADDR;
       }
       // Non-preamble bytes are silently discarded
       break;
@@ -120,7 +118,7 @@ void RTCMParser::process_byte(uint8_t byte)
       update_crc(byte);
       frame_buf_[frame_len_++] = byte;
       msg_length_              = static_cast<uint16_t>(byte & 0x03u) << 8;
-      state_                   = State::LENGTH_L;
+      set_parser_state(State::LENGTH_L);
       break;
 
     // ── Low byte of 10-bit length ──────────────────────────────────────────
@@ -132,9 +130,9 @@ void RTCMParser::process_byte(uint8_t byte)
       msg_type_                = 0;
       if (active_preamble_ == 0xE3) {
         e3_sender_id_ = 0;
-        state_ = (msg_length_ == 0) ? State::CRC_0 : State::E3_SENDER_H;
+        set_parser_state((msg_length_ == 0) ? State::CRC_0 : State::E3_SENDER_H);
       } else {
-        state_ = (msg_length_ == 0) ? State::CRC_0 : State::PAYLOAD;
+        set_parser_state((msg_length_ == 0) ? State::CRC_0 : State::PAYLOAD);
       }
       break;
 
@@ -152,7 +150,7 @@ void RTCMParser::process_byte(uint8_t byte)
       }
 
       if (++payload_count_ >= msg_length_) {
-        state_ = State::CRC_0;
+        set_parser_state(State::CRC_0);
       }
       break;
 
@@ -160,14 +158,14 @@ void RTCMParser::process_byte(uint8_t byte)
     case State::CRC_0:
       recv_crc_                = static_cast<uint32_t>(byte) << 16;
       frame_buf_[frame_len_++] = byte;
-      state_                   = State::CRC_1;
+      set_parser_state(State::CRC_1);
       break;
 
     // ── CRC byte 1 ─────────────────────────────────────────────────────────
     case State::CRC_1:
       recv_crc_               |= static_cast<uint32_t>(byte) << 8;
       frame_buf_[frame_len_++] = byte;
-      state_                   = State::CRC_2;
+      set_parser_state(State::CRC_2);
       break;
 
     // ── CRC byte 2 (LSB) — frame complete ─────────────────────────────────
@@ -189,8 +187,7 @@ void RTCMParser::process_byte(uint8_t byte)
                  active_preamble_, calc_crc_, recv_crc_, msg_type_, msg_length_);
       }
 
-      idle_since_ = ros::Time::now();
-      state_ = State::WAIT_PREAMBLE;
+      set_parser_state(State::WAIT_PREAMBLE);
       break;
     }
 
@@ -199,10 +196,9 @@ void RTCMParser::process_byte(uint8_t byte)
       frame_buf_[frame_len_++] = byte;
       //we expect only addr = 0
       if(byte!=0) {
-        idle_since_ = ros::Time::now();
-        state_ = State::WAIT_PREAMBLE;
+        set_parser_state(State::WAIT_PREAMBLE);
       }else{
-        state_ = State::E22_LEN;
+        set_parser_state(State::E22_LEN);
       }
       break;
     case State::E22_LEN:
@@ -212,14 +208,12 @@ void RTCMParser::process_byte(uint8_t byte)
         if (callback_) {
           callback_(active_preamble_, frame_buf_, frame_len_, 0);
         }
-        idle_since_ = ros::Time::now();
-        state_ = State::WAIT_PREAMBLE;
+        set_parser_state(State::WAIT_PREAMBLE);
       //we expect only msg length = 2
       } if(msg_length_ != 2) {
-        idle_since_ = ros::Time::now();
-        state_ = State::WAIT_PREAMBLE;
+        set_parser_state(State::WAIT_PREAMBLE);
       } else {
-        state_= State::E22_DATA;
+        set_parser_state(State::E22_DATA);
       }
       break;
     case State::E22_DATA:
@@ -228,8 +222,7 @@ void RTCMParser::process_byte(uint8_t byte)
         if (callback_) {
           callback_(active_preamble_, frame_buf_, frame_len_, 0);
         }
-        idle_since_ = ros::Time::now();
-        state_ = State::WAIT_PREAMBLE;
+        set_parser_state(State::WAIT_PREAMBLE);
       }
       break;
 
@@ -238,7 +231,7 @@ void RTCMParser::process_byte(uint8_t byte)
       update_crc(byte);
       frame_buf_[frame_len_++] = byte;
       e3_sender_id_ = static_cast<uint16_t>(byte) << 8;
-      state_ = State::E3_SENDER_L;
+      set_parser_state(State::E3_SENDER_L);
       break;
 
     case State::E3_SENDER_L:
@@ -246,7 +239,7 @@ void RTCMParser::process_byte(uint8_t byte)
       frame_buf_[frame_len_++] = byte;
       e3_sender_id_ |= byte;
       payload_count_ = 0;
-      state_ = (msg_length_ == 0) ? State::CRC_0 : State::E3_PAYLOAD;
+      set_parser_state((msg_length_ == 0) ? State::CRC_0 : State::E3_PAYLOAD);
       break;
 
     case State::E3_PAYLOAD:
@@ -260,7 +253,7 @@ void RTCMParser::process_byte(uint8_t byte)
         msg_type_ |= byte;
       }
       if (++payload_count_ >= msg_length_) {
-        state_ = State::CRC_0;
+        set_parser_state(State::CRC_0);
       }
       break;
   } // switch
@@ -268,6 +261,6 @@ void RTCMParser::process_byte(uint8_t byte)
 
 bool RTCMParser::is_idle_at_least(uint32_t ms) const {
   if (state_ != State::WAIT_PREAMBLE) return false;
-  if (idle_since_ == ros::Time::ZERO) return false;
-  return (ros::Time::now() - idle_since_).toSec() * 1000.0 >= ms;
+  if (switch_state_time_ == ros::Time::ZERO) return false;
+  return (ros::Time::now() - switch_state_time_).toSec() * 1000.0 >= ms;
 }

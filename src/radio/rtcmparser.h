@@ -56,9 +56,16 @@ public:
 private:
   static constexpr uint8_t RSSI_RESPONSE_PREAMBLE = 0xC1;
   std::atomic<bool> await_e22_rssi_ { false };
+  
+  struct Timing {
+    double length_ms;
+    uint8_t active_premable;
+  };
 
-  enum class State : uint8_t
-  {
+  std::list<Timing> timing_;
+  std::map<uint8_t,Timing> timing_stat_;
+
+  enum class State : uint8_t {
     WAIT_PREAMBLE,
     LENGTH_H,
     LENGTH_L,
@@ -81,6 +88,53 @@ private:
   {
     calc_crc_ = ((calc_crc_ << 8) & 0x00FFFFFFu)
                 ^ CRC_LOOKUP[((calc_crc_ >> 16) ^ byte) & 0xFFu];
+  }
+
+  void build_stat(){
+    if(timing_.size() > 100) {
+      while(timing_.size()>50) {
+        Timing &front = timing_.front();
+        auto it = timing_stat_.find(front.active_premable);
+        if (it != timing_stat_.end()) {
+          it->second.length_ms += front.length_ms;
+        }else{
+          timing_stat_[front.active_premable] = front;
+        }
+        timing_.pop_front();
+      }
+      print_stat();
+    }
+  }
+
+  void print_stat() {
+    //log timing_stat_ in format ${preamble}=######.#ms
+    //log timing_ in sequence in format ${preamble}=####.#ms
+  }
+
+  void record_idle_time(double ms) {
+    Timing t { .length_ms = ms, .active_premable = 0 };
+    timing_.push_back(t);
+    build_stat();
+  }
+
+  void record_parse_time(double ms) {
+    Timing t { .length_ms = ms, .active_premable = active_preamble_ };
+    timing_.push_back(t);
+    build_stat();
+  }
+
+  void set_parser_state(State new_state) {
+    if(state_ == State::WAIT_PREAMBLE && new_state != State::WAIT_PREAMBLE){
+      ros::Time now = ros::Time::now();
+      record_idle_time((now - switch_state_time_).toSec()*1000.0);
+      switch_state_time_ = now;
+    }
+    if(state_ != State::WAIT_PREAMBLE && new_state == State::WAIT_PREAMBLE) {
+      ros::Time now = ros::Time::now();
+      record_parse_time((now - switch_state_time_).toSec()*1000.0);
+      switch_state_time_ = now;
+    }
+    state_ = new_state;
   }
 
   /** Return true if 'byte' is a registered preamble. */
@@ -109,7 +163,7 @@ private:
   size_t  preamble_count_ { 0 };
 
   PacketCallback callback_;
-  ros::Time idle_since_;
+  ros::Time switch_state_time_;
 
   static const uint32_t CRC_LOOKUP[256];
 };
