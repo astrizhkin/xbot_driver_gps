@@ -176,7 +176,8 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length, uint16_t m
 }
 
 void scheduleRSSI() {
-  if((ros::Time::now() - g_rssi_sent_at).toSec() < g_rssi_period) {
+  ros::Time now = ros::Time::now();
+  if((now - g_rssi_sent_at).toSec() < g_rssi_period) {
     return;
   }
 
@@ -185,6 +186,7 @@ void scheduleRSSI() {
              (ros::Time::now() - g_rssi_sent_at).toSec());
   }
   
+  g_rssi_sent_at = now;
   enqueue_tx(RSSI_CMD_VEC);
 }
 
@@ -277,7 +279,6 @@ void tx_thread_fn() {
     //set await rssi right before serial write
     if(to_write == RSSI_CMD_VEC) {
       ROS_WARN("[radio] RSSI packet is going to radio");
-      g_rssi_sent_at = ros::Time::now();
       parser.await_e22_rssi(true);
     }
 
@@ -303,6 +304,9 @@ void tx_thread_fn() {
 
         std::lock_guard<std::mutex> lk2(g_tx_mutex);
         g_tx_packet_buf.insert(g_tx_packet_buf.begin(), unsent);
+      } else {
+        //wait to flush the packet
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
       }
     }
     catch (const std::exception& e)
