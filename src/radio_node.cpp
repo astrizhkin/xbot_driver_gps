@@ -21,7 +21,8 @@ static constexpr int     RECONNECT_DELAY_S = 1;   ///< pause between reconnect a
 
 // RSSI query command: C0 C1 C2 C3 + start_addr(0x00) + read_length(0x02)
 // reads two registers: 0x00 = ambient noise RSSI, 0x01 = last-packet RSSI
-static constexpr uint8_t RSSI_CMD[] = { 0xC0, 0xC1, 0xC2, 0xC3, 0x00, 0x02 };
+//static constexpr uint8_t RSSI_CMD[] = { 0xC0, 0xC1, 0xC2, 0xC3, 0x00, 0x02 };
+static std::vector<uint8_t> RSSI_CMD_VEC = { 0xC0, 0xC1, 0xC2, 0xC3, 0x00, 0x02 };
 
 // Response preamble from the radio for register-read replies
 static constexpr uint8_t RSSI_RESPONSE_PREAMBLE = 0xC1;
@@ -40,10 +41,9 @@ static ros::Publisher          g_rssi_pub;
 
 static serial::Serial          g_serial;
 static std::atomic<bool>       g_stopped { false };
-static std::atomic<bool>       g_inject_rssi { false };
 
 // TX queue
-static std::vector<uint8_t>    g_tx_buf;
+static std::list<std::vector<uint8_t>>    g_tx_packet_buf;
 static std::mutex              g_tx_mutex;
 static std::condition_variable g_tx_cv;
 
@@ -60,17 +60,31 @@ void scheduleRSSI();
 
 RTCMParser parser;
 
+static size_t tx_buf_size() {
+  size_t buf_size = 0;
+  for(auto &p : g_tx_packet_buf) {
+    buf_size += p.size();
+  }
+  return buf_size;
+}
 
 // ── TX helper — enqueue bytes and wake tx_thread ───────────────────────────
-static void enqueue_tx(const uint8_t* data, size_t len) {
+static void enqueue_tx(const std::vector<uint8_t> &packet) 
+{
   {
     std::lock_guard<std::mutex> lk(g_tx_mutex);
-    g_tx_buf.insert(g_tx_buf.end(), data, data + len);
-    if (g_tx_buf.size() > 1000) {
-      ROS_WARN_THROTTLE(5, "[radio] TX buffer growing large: %zu bytes", g_tx_buf.size());
+    g_tx_packet_buf.push_back(packet);
+    size_t buf_size = tx_buf_size();
+    if (buf_size > 1000) {
+      ROS_WARN_THROTTLE(5, "[radio] TX buffer growing large: %zu bytes", buf_size);
     }
   }
   g_tx_cv.notify_one();
+}
+
+static void enqueue_tx(const uint8_t* data, size_t len) {
+    std::vector<uint8_t> packet;
+    enqueue_tx(packet);
 }
 
 // ── E3 frame builder — wraps payload with preamble/length/sender/CRC ──────
@@ -171,8 +185,7 @@ void scheduleRSSI() {
              (ros::Time::now() - g_rssi_sent_at).toSec());
   }
   
-  g_inject_rssi.store(true);
-  g_tx_cv.notify_one();
+  enqueue_tx(RSSI_CMD_VEC);
 }
 
 // ── RX thread ──────────────────────────────────────────────────────────────
@@ -233,22 +246,20 @@ void tx_thread_fn() {
 
     // Block until data is queued or we are asked to stop
     g_tx_cv.wait_for(lk, std::chrono::seconds(1),
-                     [] { return !g_tx_buf.empty() || g_stopped.load() || g_inject_rssi.load(); });
+                     [] { return !g_tx_packet_buf.empty() || g_stopped.load(); });
 
 
-    bool inject_rssi = g_inject_rssi.load();
-
-    if (g_tx_buf.empty() || !inject_rssi) continue;
+    if (g_tx_packet_buf.empty()) continue;
 
     if (!g_serial.isOpen()) {
-      ROS_WARN_THROTTLE(5, "[radio] TX: serial port not open, dropping %zu bytes", g_tx_buf.size());
-      g_tx_buf.clear();
+      ROS_WARN_THROTTLE(5, "[radio] TX: serial port not open, dropping %zu packets", g_tx_packet_buf.size());
+      g_tx_packet_buf.clear();
       continue;
     }
 
-    // Snapshot and release the lock before the (potentially blocking) write
-    std::vector<uint8_t> to_write;
-    to_write.swap(g_tx_buf);
+    // Take first packet and release the lock before the (potentially blocking) write
+    std::vector<uint8_t> &to_write = g_tx_packet_buf.front();
+    g_tx_packet_buf.pop_front();
     lk.unlock();
 
     // Wait for parser to be idle max 2000ms before transmitting
@@ -264,11 +275,10 @@ void tx_thread_fn() {
     }
 
     //set await rssi right before serial write
-    if(inject_rssi && to_write.empty()) {
+    if(to_write == RSSI_CMD_VEC) {
+      ROS_WARN("[radio] RSSI packet is going to radio");
       g_rssi_sent_at = ros::Time::now();
-      g_inject_rssi.store(false);
       parser.await_e22_rssi(true);
-      to_write.insert(to_write.begin(), RSSI_CMD, RSSI_CMD + sizeof(RSSI_CMD));
     }
 
     // Debug: hex dump E3 frame
@@ -287,10 +297,12 @@ void tx_thread_fn() {
       if (written != to_write.size()) {
         ROS_WARN("[radio] TX: partial write - %zu of %zu bytes sent", written, to_write.size());
         // Re-queue the unsent tail
-        std::lock_guard<std::mutex> lk2(g_tx_mutex);
-        g_tx_buf.insert(g_tx_buf.begin(),
-                        to_write.begin() + written,
+        std::vector<uint8_t> unsent;
+        unsent.assign(to_write.begin() + written,
                         to_write.end());
+
+        std::lock_guard<std::mutex> lk2(g_tx_mutex);
+        g_tx_packet_buf.insert(g_tx_packet_buf.begin(), unsent);
       }
     }
     catch (const std::exception& e)
