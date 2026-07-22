@@ -264,11 +264,11 @@ void tx_thread_fn() {
     }
 
     //set await rssi right before serial write
-    if(inject_rssi) {
+    if(inject_rssi && to_write.empty()) {
       g_rssi_sent_at = ros::Time::now();
       g_inject_rssi.store(false);
       parser.await_e22_rssi(true);
-      g_tx_buf.insert(g_tx_buf.begin(), RSSI_CMD, RSSI_CMD + sizeof(RSSI_CMD));
+      to_write.insert(to_write.begin(), RSSI_CMD, RSSI_CMD + sizeof(RSSI_CMD));
     }
 
     // Debug: hex dump E3 frame
