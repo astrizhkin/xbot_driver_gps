@@ -83,7 +83,7 @@ static void enqueue_tx(const std::vector<uint8_t> &packet)
 }
 
 static void enqueue_tx(const uint8_t* data, size_t len) {
-    std::vector<uint8_t> packet;
+    std::vector<uint8_t> packet(data, data + len);
     enqueue_tx(packet);
 }
 
