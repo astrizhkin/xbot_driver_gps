@@ -7,6 +7,8 @@
 #include <string>
 #include <ros/ros.h>
 
+//#define PARSER_DEBUG_TIMING
+
 /**
  * Streaming parser for RTCM3-style framed packets.
  *
@@ -22,7 +24,8 @@
  *
  * 'frame' points to the complete raw frame (preamble … CRC inclusive).
  * The pointer is only valid for the duration of the callback.
- */
+ */#define DEBUG_TIMING
+
 class RTCMParser
 {
 public:
@@ -99,6 +102,7 @@ private:
                 ^ CRC_LOOKUP[((calc_crc_ >> 16) ^ byte) & 0xFFu];
   }
 
+  #ifdef PARSER_DEBUG_TIMING
   void build_stat(){
     if(timing_.size() > 100) {
       while(timing_.size()>50) {
@@ -144,16 +148,21 @@ private:
     timing_.push_back(t);
     build_stat();
   }
+  #endif
 
   void set_parser_state(State new_state) {
     if(state_ == State::WAIT_PREAMBLE && new_state != State::WAIT_PREAMBLE){
       ros::Time now = ros::Time::now();
-      record_idle_time((now - switch_state_time_).toSec()*1000.0);
+      #ifdef PARSER_DEBUG_TIMING
+        record_idle_time((now - switch_state_time_).toSec()*1000.0);
+      #endif
       switch_state_time_ = now;
     }
     if(state_ != State::WAIT_PREAMBLE && new_state == State::WAIT_PREAMBLE) {
       ros::Time now = ros::Time::now();
-      record_parse_time((now - switch_state_time_).toSec()*1000.0);
+      #ifdef PARSER_DEBUG_TIMING
+        record_parse_time((now - switch_state_time_).toSec()*1000.0);
+      #endif
       switch_state_time_ = now;
     }
     state_ = new_state;

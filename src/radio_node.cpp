@@ -36,6 +36,7 @@ static ros::Time         g_rssi_sent_at;          // written/read on main thread
 static uint32_t g_rx_noactivity_timout_ms;
 static uint32_t g_rx_tx_delay_ms;
 static uint32_t g_tx_window_ms;
+static uint32_t g_tx_air_baudrate;
 
 // ── Globals (node-scoped) ──────────────────────────────────────────────────
 static ros::Publisher          g_rtcm_pub;
@@ -287,7 +288,7 @@ void tx_thread_fn() {
 
     //set await rssi right before serial write
     if(to_write == RSSI_CMD_VEC) {
-      ROS_WARN("[radio] RSSI packet is going to radio");
+      //ROS_WARN("[radio] RSSI packet is going to radio");
       parser.await_e22_rssi(true);
     }
 
@@ -315,7 +316,9 @@ void tx_thread_fn() {
         g_tx_packet_buf.insert(g_tx_packet_buf.begin(), unsent);
       } else {
         //wait to flush the packet
-        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        //~200 bytes * 8 * 1000 / 19200 = 83ms
+        uint32_t wait_flush = written * 8 * 1000 / g_tx_air_baudrate;
+        std::this_thread::sleep_for(std::chrono::milliseconds(wait_flush));
       }
     }
     catch (const std::exception& e)
@@ -348,11 +351,12 @@ int main(int argc, char** argv) {
   const uint32_t    baudrate = pnh.param("baudrate", 115200);
   g_rssi_period = pnh.param("rssi_poll_period", 5.0);   // seconds
   
+  g_rx_noactivity_timout_ms = pnh.param("rx_noactivity_timout_ms", 2000); // milliseconds
   //safe margin for 128 bytes packet = 75ms
   //safe margin for 240 bytes packet = 125ms
-  g_rx_noactivity_timout_ms = pnh.param("rx_noactivity_timout_ms", 2000); // milliseconds
-  g_rx_tx_delay_ms = pnh.param("rx_tx_delay_ms", 75); // milliseconds
-  g_tx_window_ms = pnh.param("tx_window_ms", 75); // milliseconds
+  g_rx_tx_delay_ms = pnh.param("rx_tx_delay_ms", 25); // milliseconds
+  g_tx_window_ms = pnh.param("tx_window_ms", 100); // milliseconds
+  g_tx_air_baudrate = pnh.param("tx_air_baudrate", 19200);
 
   parser.init({0xD3, 0xE3}, on_packet);
 
@@ -395,8 +399,8 @@ int main(int argc, char** argv) {
   std::thread rx_thread(rx_thread_fn, port, baudrate);
   std::thread tx_thread(tx_thread_fn);
 
-  ROS_INFO("[radio] Started: port=%s baudrate=%u e3_sender=0x%04X rssi_poll=%.1fs rx_tx_delay=%u tx_window=%u",
-           port.c_str(), baudrate, g_e3_sender_id, g_rssi_period, g_rx_tx_delay_ms, g_tx_window_ms);
+  ROS_INFO("[radio] Started: port=%s baudrate=%u e3_sender=0x%04X rssi_poll=%.1fs rx_tx_delay=%u tx_window=%u air_badurate=%u",
+           port.c_str(), baudrate, g_e3_sender_id, g_rssi_period, g_rx_tx_delay_ms, g_tx_window_ms, g_tx_air_baudrate);
 
   ros::spin();   // blocks here; handles write_sub callbacks on the main thread
 
