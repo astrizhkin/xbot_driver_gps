@@ -270,12 +270,18 @@ void tx_thread_fn() {
     // Wait for parser to be idle max 2000ms before transmitting
     uint32_t wait_time = 2000;
     ros::Time wait_start = ros::Time::now();
-    while (!g_stopped && !parser.is_idle_at_least(g_tx_idle_delay_ms) && wait_time > 0) {
+
+    while (!g_stopped && 
+      !(
+        parser.in_idle_ms() > g_rx_noactivity_timout_ms //no rx activity at all
+        || (parser.in_idle_ms() > g_rx_tx_delay_ms && parser.in_idle_ms() < (g_rx_tx_delay_ms + g_tx_window_ms)) //small window after rx activity
+      )
+      && wait_time > 0) {
       std::this_thread::sleep_for(std::chrono::milliseconds(5));
       wait_time-=5;
     }
 
-    if(!parser.is_idle_at_least(g_tx_idle_delay_ms)){
+    if(parser.in_idle_ms() < g_rx_tx_delay_ms){
       ROS_WARN("[radio] Parser states RX channel is still busy after 2000ms");
     }
 
@@ -389,8 +395,8 @@ int main(int argc, char** argv) {
   std::thread rx_thread(rx_thread_fn, port, baudrate);
   std::thread tx_thread(tx_thread_fn);
 
-  ROS_INFO("[radio] Started: port=%s baudrate=%u e3_sender=0x%04X rssi_poll=%.1fs tx_delay=%u",
-           port.c_str(), baudrate, g_e3_sender_id, g_rssi_period, g_tx_idle_delay_ms);
+  ROS_INFO("[radio] Started: port=%s baudrate=%u e3_sender=0x%04X rssi_poll=%.1fs rx_tx_delay=%u tx_window=%u",
+           port.c_str(), baudrate, g_e3_sender_id, g_rssi_period, g_rx_tx_delay_ms, g_tx_window_ms);
 
   ros::spin();   // blocks here; handles write_sub callbacks on the main thread
 
