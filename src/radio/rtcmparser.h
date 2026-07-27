@@ -57,6 +57,8 @@ public:
 
 private:
   static constexpr uint8_t RSSI_RESPONSE_PREAMBLE = 0xC1;
+  static constexpr uint8_t RSSI_REQUEST_PREAMBLE = 0xC0;
+  
   std::atomic<bool> await_e22_rssi_ { false };
   
   struct Timing {
@@ -82,6 +84,11 @@ private:
     E3_SENDER_H,
     E3_SENDER_L,
     E3_PAYLOAD,
+    E22_RSSI_MAGIC1,// rssi request magic1
+    E22_RSSI_MAGIC2,// rssi request magic2
+    E22_RSSI_MAGIC3,// rssi request magic3
+    E22_RSSI1,      // rssi request 1
+    E22_RSSI2,      // rssi request 2
   };
 
   void process_byte(uint8_t byte);

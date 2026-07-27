@@ -109,10 +109,28 @@ void RTCMParser::process_byte(uint8_t byte)
         calc_crc_                = 0;
         frame_len_               = 0;
         frame_buf_[frame_len_++] = byte;
+      } else if (byte == RSSI_REQUEST_PREAMBLE) {
+        active_preamble_         = byte;
+        set_parser_state(State::E22_RSSI_MAGIC1);
       }
       // Non-preamble bytes are silently discarded
       break;
-
+    case State::E22_RSSI_MAGIC1:
+      set_parser_state(byte == 0xC1 ? State::E22_RSSI_MAGIC2 : State::WAIT_PREAMBLE);
+      break;
+    case State::E22_RSSI_MAGIC2:
+      set_parser_state( byte == 0xC2 ? State::E22_RSSI_MAGIC3 : State::WAIT_PREAMBLE);
+      break;
+    case State::E22_RSSI_MAGIC3:
+      set_parser_state( byte == 0xC3 ? State::E22_RSSI1 : State::WAIT_PREAMBLE);
+      break;
+    case State::E22_RSSI1:
+      set_parser_state( State::E22_RSSI2);
+      break;
+    case State::E22_RSSI2:
+      ROS_WARN("[RTCMParser] got RSSI request magic, skip it");
+      set_parser_state( State::WAIT_PREAMBLE);
+      break;
     // ── High byte of 10-bit length ─────────────────────────────────────────
     case State::LENGTH_H:
       update_crc(byte);
