@@ -277,8 +277,8 @@ void RTCMParser::process_byte(uint8_t byte)
   } // switch
 }
 
-bool RTCMParser::is_idle_at_least(uint32_t ms) const {
-  if (state_ != State::WAIT_PREAMBLE) return false;
-  if (switch_state_time_ == ros::Time::ZERO) return false;
-  return (ros::Time::now() - switch_state_time_).toSec() * 1000.0 >= ms;
+uint32_t RTCMParser::in_idle_ms() const {
+  if (state_ != State::WAIT_PREAMBLE) return 0;
+  if (switch_state_time_ == ros::Time::ZERO) return 0;
+  return (ros::Time::now() - switch_state_time_).toSec() * 1000.0;
 }

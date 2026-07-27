@@ -32,7 +32,10 @@ static inline int rssi_to_dbm(uint8_t rssi) { return -(256 - static_cast<int>(rs
 
 static double g_rssi_period;
 static ros::Time         g_rssi_sent_at;          // written/read on main thread only
-static uint32_t g_tx_idle_delay_ms;               // ms to wait for parser idle before TX
+
+static uint32_t g_rx_noactivity_timout_ms;
+static uint32_t g_rx_tx_delay_ms;
+static uint32_t g_tx_window_ms;
 
 // ── Globals (node-scoped) ──────────────────────────────────────────────────
 static ros::Publisher          g_rtcm_pub;
@@ -341,7 +344,9 @@ int main(int argc, char** argv) {
   
   //safe margin for 128 bytes packet = 75ms
   //safe margin for 240 bytes packet = 125ms
-  g_tx_idle_delay_ms = pnh.param("tx_idle_delay_ms", 75); // milliseconds
+  g_rx_noactivity_timout_ms = pnh.param("rx_noactivity_timout_ms", 2000); // milliseconds
+  g_rx_tx_delay_ms = pnh.param("rx_tx_delay_ms", 75); // milliseconds
+  g_tx_window_ms = pnh.param("tx_window_ms", 75); // milliseconds
 
   parser.init({0xD3, 0xE3}, on_packet);
 

@@ -43,7 +43,7 @@ public:
   uint32_t valid_count()   const { return valid_count_;   }
   uint32_t invalid_count() const { return invalid_count_; }
   bool is_idle()           const { return state_ == State::WAIT_PREAMBLE; }
-  bool is_idle_at_least(uint32_t ms) const;
+  uint32_t in_idle_time() const;
 
   /**
    * Init the parser with a set of recognised preambles and a single
