@@ -41,12 +41,10 @@ const uint32_t RTCMParser::CRC_LOOKUP[256] = {
   0x42FA2F, 0xC4B6D4, 0xC82F22, 0x4E63D9, 0xD11CCE, 0x575035, 0x5BC9C3, 0xDD8538
 };
 
-// ---------------------------------------------------------------------------
-// Constructor
-// ---------------------------------------------------------------------------
-RTCMParser::RTCMParser(std::initializer_list<uint8_t> preambles, PacketCallback callback)
-  : callback_(std::move(callback))
+void RTCMParser::init(std::initializer_list<uint8_t> preambles, PacketCallback callback)
 {
+  callback_ = std::move(callback);
+  switch_state_time_ = ros::Time::now();
   preamble_count_ = 0;
   for (uint8_t p : preambles)
   {
@@ -100,27 +98,45 @@ void RTCMParser::process_byte(uint8_t byte)
     case State::WAIT_PREAMBLE:
       if (is_preamble(byte)) {
         active_preamble_         = byte;
+        set_parser_state(State::LENGTH_H);
         calc_crc_                = 0;
         frame_len_               = 0;
         update_crc(byte);
         frame_buf_[frame_len_++] = byte;
-        state_                   = State::LENGTH_H;
       } else if(byte==RSSI_RESPONSE_PREAMBLE && is_await_e22_rssi()) {
         active_preamble_         = byte;
+        set_parser_state(State::E22_ADDR);
         calc_crc_                = 0;
         frame_len_               = 0;
         frame_buf_[frame_len_++] = byte;
-        state_                    = State::E22_ADDR;
+      } else if (byte == RSSI_REQUEST_PREAMBLE) {
+        active_preamble_         = byte;
+        set_parser_state(State::E22_RSSI_MAGIC1);
       }
       // Non-preamble bytes are silently discarded
       break;
-
+    case State::E22_RSSI_MAGIC1:
+      set_parser_state(byte == 0xC1 ? State::E22_RSSI_MAGIC2 : State::WAIT_PREAMBLE);
+      break;
+    case State::E22_RSSI_MAGIC2:
+      set_parser_state( byte == 0xC2 ? State::E22_RSSI_MAGIC3 : State::WAIT_PREAMBLE);
+      break;
+    case State::E22_RSSI_MAGIC3:
+      set_parser_state( byte == 0xC3 ? State::E22_RSSI1 : State::WAIT_PREAMBLE);
+      break;
+    case State::E22_RSSI1:
+      set_parser_state( State::E22_RSSI2);
+      break;
+    case State::E22_RSSI2:
+      ROS_WARN("[RTCMParser] got RSSI request magic, skip it");
+      set_parser_state( State::WAIT_PREAMBLE);
+      break;
     // ── High byte of 10-bit length ─────────────────────────────────────────
     case State::LENGTH_H:
       update_crc(byte);
       frame_buf_[frame_len_++] = byte;
       msg_length_              = static_cast<uint16_t>(byte & 0x03u) << 8;
-      state_                   = State::LENGTH_L;
+      set_parser_state(State::LENGTH_L);
       break;
 
     // ── Low byte of 10-bit length ──────────────────────────────────────────
@@ -130,7 +146,12 @@ void RTCMParser::process_byte(uint8_t byte)
       msg_length_             |= byte;
       payload_count_           = 0;
       msg_type_                = 0;
-      state_ = (msg_length_ == 0) ? State::CRC_0 : State::PAYLOAD;
+      if (active_preamble_ == 0xE3) {
+        e3_sender_id_ = 0;
+        set_parser_state((msg_length_ == 0) ? State::CRC_0 : State::E3_SENDER_H);
+      } else {
+        set_parser_state((msg_length_ == 0) ? State::CRC_0 : State::PAYLOAD);
+      }
       break;
 
     // ── Payload bytes ──────────────────────────────────────────────────────
@@ -147,7 +168,7 @@ void RTCMParser::process_byte(uint8_t byte)
       }
 
       if (++payload_count_ >= msg_length_) {
-        state_ = State::CRC_0;
+        set_parser_state(State::CRC_0);
       }
       break;
 
@@ -155,14 +176,14 @@ void RTCMParser::process_byte(uint8_t byte)
     case State::CRC_0:
       recv_crc_                = static_cast<uint32_t>(byte) << 16;
       frame_buf_[frame_len_++] = byte;
-      state_                   = State::CRC_1;
+      set_parser_state(State::CRC_1);
       break;
 
     // ── CRC byte 1 ─────────────────────────────────────────────────────────
     case State::CRC_1:
       recv_crc_               |= static_cast<uint32_t>(byte) << 8;
       frame_buf_[frame_len_++] = byte;
-      state_                   = State::CRC_2;
+      set_parser_state(State::CRC_2);
       break;
 
     // ── CRC byte 2 (LSB) — frame complete ─────────────────────────────────
@@ -175,7 +196,8 @@ void RTCMParser::process_byte(uint8_t byte)
         //ROS_INFO("[RTCMParser] Valid frame: preamble=0x%02X type=%u payload_len=%u",
         //          active_preamble_, msg_type_, msg_length_);
         if (callback_) {
-          callback_(active_preamble_, frame_buf_, frame_len_, msg_type_);
+          uint16_t info = (active_preamble_ == 0xE3) ? e3_sender_id_ : msg_type_;
+          callback_(active_preamble_, frame_buf_, frame_len_, info);
         }
       } else {
         ++invalid_count_;
@@ -183,7 +205,7 @@ void RTCMParser::process_byte(uint8_t byte)
                  active_preamble_, calc_crc_, recv_crc_, msg_type_, msg_length_);
       }
 
-      state_ = State::WAIT_PREAMBLE;
+      set_parser_state(State::WAIT_PREAMBLE);
       break;
     }
 
@@ -192,9 +214,9 @@ void RTCMParser::process_byte(uint8_t byte)
       frame_buf_[frame_len_++] = byte;
       //we expect only addr = 0
       if(byte!=0) {
-        state_ = State::WAIT_PREAMBLE;
+        set_parser_state(State::WAIT_PREAMBLE);
       }else{
-        state_ = State::E22_LEN;
+        set_parser_state(State::E22_LEN);
       }
       break;
     case State::E22_LEN:
@@ -204,12 +226,12 @@ void RTCMParser::process_byte(uint8_t byte)
         if (callback_) {
           callback_(active_preamble_, frame_buf_, frame_len_, 0);
         }
-        state_ = State::WAIT_PREAMBLE;
+        set_parser_state(State::WAIT_PREAMBLE);
       //we expect only msg length = 2
       } if(msg_length_ != 2) {
-        state_ = State::WAIT_PREAMBLE;
+        set_parser_state(State::WAIT_PREAMBLE);
       } else {
-        state_= State::E22_DATA;
+        set_parser_state(State::E22_DATA);
       }
       break;
     case State::E22_DATA:
@@ -218,8 +240,45 @@ void RTCMParser::process_byte(uint8_t byte)
         if (callback_) {
           callback_(active_preamble_, frame_buf_, frame_len_, 0);
         }
-        state_ = State::WAIT_PREAMBLE;
+        set_parser_state(State::WAIT_PREAMBLE);
+      }
+      break;
+
+    // ── E3 (0xE3) frames — SENDER_ID + KV data ─────────────────────────────
+    case State::E3_SENDER_H:
+      update_crc(byte);
+      frame_buf_[frame_len_++] = byte;
+      e3_sender_id_ = static_cast<uint16_t>(byte) << 8;
+      set_parser_state(State::E3_SENDER_L);
+      break;
+
+    case State::E3_SENDER_L:
+      update_crc(byte);
+      frame_buf_[frame_len_++] = byte;
+      e3_sender_id_ |= byte;
+      payload_count_ = 0;
+      set_parser_state((msg_length_ == 0) ? State::CRC_0 : State::E3_PAYLOAD);
+      break;
+
+    case State::E3_PAYLOAD:
+      update_crc(byte);
+      frame_buf_[frame_len_++] = byte;
+      // Log the first KV key for debugging
+      if (payload_count_ == 0) {
+        msg_type_ = static_cast<uint16_t>(byte) << 8;
+      }
+      else if (payload_count_ == 1) {
+        msg_type_ |= byte;
+      }
+      if (++payload_count_ >= msg_length_) {
+        set_parser_state(State::CRC_0);
       }
       break;
   } // switch
+}
+
+uint32_t RTCMParser::in_idle_ms() const {
+  if (state_ != State::WAIT_PREAMBLE) return 0;
+  if (switch_state_time_ == ros::Time::ZERO) return 0;
+  return (ros::Time::now() - switch_state_time_).toSec() * 1000.0;
 }

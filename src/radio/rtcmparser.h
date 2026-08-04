@@ -1,9 +1,13 @@
 #pragma once
 
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <initializer_list>
+#include <string>
 #include <ros/ros.h>
+
+//#define PARSER_DEBUG_TIMING
 
 /**
  * Streaming parser for RTCM3-style framed packets.
@@ -20,7 +24,8 @@
  *
  * 'frame' points to the complete raw frame (preamble … CRC inclusive).
  * The pointer is only valid for the duration of the callback.
- */
+ */#define DEBUG_TIMING
+
 class RTCMParser
 {
 public:
@@ -29,15 +34,6 @@ public:
                                             size_t         length,
                                             uint16_t       msg_type)>;
 
-  /**
-   * Construct the parser with a set of recognised preambles and a single
-   * shared callback.  Any byte NOT in the preamble list is silently discarded
-   * while the parser is waiting for a frame start.
-   *
-   * Example:
-   *   RTCMParser parser({0xD3, 0xE3}, my_callback);
-   */
-  RTCMParser(std::initializer_list<uint8_t> preambles, PacketCallback callback);
 
   /** Feed a buffer of bytes into the parser. */
   void feed(const uint8_t* data, size_t length);
@@ -50,13 +46,33 @@ public:
   uint32_t valid_count()   const { return valid_count_;   }
   uint32_t invalid_count() const { return invalid_count_; }
   bool is_idle()           const { return state_ == State::WAIT_PREAMBLE; }
+  uint32_t in_idle_ms() const;
+
+  /**
+   * Init the parser with a set of recognised preambles and a single
+   * shared callback.  Any byte NOT in the preamble list is silently discarded
+   * while the parser is waiting for a frame start.
+   *
+   * Example:
+   *   init({0xD3, 0xE3}, my_callback);
+   */
+  void init(std::initializer_list<uint8_t> preambles, PacketCallback callback);
 
 private:
   static constexpr uint8_t RSSI_RESPONSE_PREAMBLE = 0xC1;
+  static constexpr uint8_t RSSI_REQUEST_PREAMBLE = 0xC0;
+  
   std::atomic<bool> await_e22_rssi_ { false };
+  
+  struct Timing {
+    double length_ms;
+    uint8_t active_premable;
+  };
 
-  enum class State : uint8_t
-  {
+  std::list<Timing> timing_;
+  std::map<uint8_t,Timing> timing_stat_;
+
+  enum class State : uint8_t {
     WAIT_PREAMBLE,
     LENGTH_H,
     LENGTH_L,
@@ -67,6 +83,15 @@ private:
     E22_ADDR,
     E22_LEN,
     E22_DATA,
+    // E3 (0xE3) specific states — has SENDER_ID field after length
+    E3_SENDER_H,
+    E3_SENDER_L,
+    E3_PAYLOAD,
+    E22_RSSI_MAGIC1,// rssi request magic1
+    E22_RSSI_MAGIC2,// rssi request magic2
+    E22_RSSI_MAGIC3,// rssi request magic3
+    E22_RSSI1,      // rssi request 1
+    E22_RSSI2,      // rssi request 2
   };
 
   void process_byte(uint8_t byte);
@@ -75,6 +100,72 @@ private:
   {
     calc_crc_ = ((calc_crc_ << 8) & 0x00FFFFFFu)
                 ^ CRC_LOOKUP[((calc_crc_ >> 16) ^ byte) & 0xFFu];
+  }
+
+  #ifdef PARSER_DEBUG_TIMING
+  void build_stat(){
+    if(timing_.size() > 100) {
+      while(timing_.size()>50) {
+        Timing &front = timing_.front();
+        auto it = timing_stat_.find(front.active_premable);
+        if (it != timing_stat_.end()) {
+          it->second.length_ms += front.length_ms;
+        }else{
+          timing_stat_[front.active_premable] = front;
+        }
+        timing_.pop_front();
+      }
+      print_stat();
+    }
+  }
+
+  void print_stat() {
+    std::string stat;
+    for (auto& [prem, t] : timing_stat_) {
+      char buf[32];
+      snprintf(buf, sizeof(buf), "0x%02X=%.1fms ", prem, t.length_ms);
+      stat += buf;
+    }
+    ROS_INFO("[RTCMParser] avg: %s", stat.c_str());
+
+    std::string seq;
+    for (auto& t : timing_) {
+      char buf[16];
+      snprintf(buf, sizeof(buf), "0x%02X=%.1fms ", t.active_premable, t.length_ms);
+      seq += buf;
+    }
+    ROS_INFO("[RTCMParser] seq: %s", seq.c_str());
+  }
+
+  void record_idle_time(double ms) {
+    Timing t { .length_ms = ms, .active_premable = 0 };
+    timing_.push_back(t);
+    build_stat();
+  }
+
+  void record_parse_time(double ms) {
+    Timing t { .length_ms = ms, .active_premable = active_preamble_ };
+    timing_.push_back(t);
+    build_stat();
+  }
+  #endif
+
+  void set_parser_state(State new_state) {
+    if(state_ == State::WAIT_PREAMBLE && new_state != State::WAIT_PREAMBLE){
+      ros::Time now = ros::Time::now();
+      #ifdef PARSER_DEBUG_TIMING
+        record_idle_time((now - switch_state_time_).toSec()*1000.0);
+      #endif
+      switch_state_time_ = now;
+    }
+    if(state_ != State::WAIT_PREAMBLE && new_state == State::WAIT_PREAMBLE) {
+      ros::Time now = ros::Time::now();
+      #ifdef PARSER_DEBUG_TIMING
+        record_parse_time((now - switch_state_time_).toSec()*1000.0);
+      #endif
+      switch_state_time_ = now;
+    }
+    state_ = new_state;
   }
 
   /** Return true if 'byte' is a registered preamble. */
@@ -90,9 +181,10 @@ private:
   uint32_t recv_crc_       { 0 };
   uint32_t valid_count_    { 0 };
   uint32_t invalid_count_  { 0 };
+  uint16_t e3_sender_id_   { 0 };
 
-  // Max frame: preamble(1) + header(2) + payload(1023) + CRC(3) = 1029 bytes
-  static constexpr size_t MAX_FRAME_SIZE = 1029;
+  // Max frame: preamble(1) + header(2) + sender_id(2, E3 only) + payload(1023) + CRC(3) = 1031 bytes
+  static constexpr size_t MAX_FRAME_SIZE = 1031;
   uint8_t frame_buf_[MAX_FRAME_SIZE];
   size_t  frame_len_ { 0 };
 
@@ -102,6 +194,7 @@ private:
   size_t  preamble_count_ { 0 };
 
   PacketCallback callback_;
+  ros::Time switch_state_time_;
 
   static const uint32_t CRC_LOOKUP[256];
 };

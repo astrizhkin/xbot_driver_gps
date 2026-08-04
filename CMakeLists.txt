@@ -13,6 +13,7 @@ find_package(catkin REQUIRED COMPONENTS
         tf2
         rosgraph_msgs
         message_generation
+        e3_lib
         )
 
 add_service_files(

@@ -11,18 +11,18 @@
 
 #include <serial/serial.h>
 
+#include "e3_lib/e3parser.h"
 #include "radio/rtcmparser.h"
 
 // ── Constants ──────────────────────────────────────────────────────────────
 static constexpr size_t  READ_CHUNK      = 512;   ///< bytes per serial::read call
 static constexpr int     READ_TIMEOUT_MS = 100;   ///< serial read timeout (ms)
 static constexpr int     RECONNECT_DELAY_S = 1;   ///< pause between reconnect attempts
-static constexpr double  RSSI_POLL_DELAY = 0.2;
 
 // RSSI query command: C0 C1 C2 C3 + start_addr(0x00) + read_length(0x02)
 // reads two registers: 0x00 = ambient noise RSSI, 0x01 = last-packet RSSI
-static constexpr uint8_t RSSI_CMD[] = { 0xC0, 0xC1, 0xC2, 0xC3, 0x00, 0x02 };
-
+//static constexpr uint8_t RSSI_CMD[] = { 0xC0, 0xC1, 0xC2, 0xC3, 0x00, 0x02 };
+static std::vector<uint8_t> RSSI_CMD_VEC = { 0xC0, 0xC1, 0xC2, 0xC3, 0x00, 0x02 };
 
 // Response preamble from the radio for register-read replies
 static constexpr uint8_t RSSI_RESPONSE_PREAMBLE = 0xC1;
@@ -30,56 +30,90 @@ static constexpr uint8_t RSSI_RESPONSE_PREAMBLE = 0xC1;
 // dBm conversion per spec: dBm = -(256 - RSSI)
 static inline int rssi_to_dbm(uint8_t rssi) { return -(256 - static_cast<int>(rssi)); }
 
-// Reactive RSSI polling: scheduleRSSI() is called on every D3/E3 packet.
-// Checks if ≥5s elapsed since last RSSI send. If so, schedules a 100ms
-// one-shot timer. When the timer fires, the RSSI command is enqueued.
-// If more D3/E3 packets arrive during the 100ms window, the timer is
-// rescheduled (createTimer replaces the previous pending timer).
 static double g_rssi_period;
 static ros::Time         g_rssi_sent_at;          // written/read on main thread only
-static ros::Timer             g_rssi_timer;
+
+static uint32_t g_rx_noactivity_timout_ms;
+static uint32_t g_rx_tx_delay_ms;
+static uint32_t g_tx_window_ms;
+static uint32_t g_tx_air_baudrate;
 
 // ── Globals (node-scoped) ──────────────────────────────────────────────────
 static ros::Publisher          g_rtcm_pub;
-static ros::Publisher          g_cmd_pub;
+static ros::Publisher          g_e3_payload_pub;
 static ros::Publisher          g_rssi_pub;
 
 static serial::Serial          g_serial;
 static std::atomic<bool>       g_stopped { false };
 
 // TX queue
-static std::vector<uint8_t>    g_tx_buf;
+static std::list<std::vector<uint8_t>>    g_tx_packet_buf;
 static std::mutex              g_tx_mutex;
 static std::condition_variable g_tx_cv;
+
+// E3 sender ID (derived from ROBOT_ID env var)
+static uint16_t g_e3_sender_id { 0 };
 
 // ── Forward declarations ───────────────────────────────────────────────────
 void rx_thread_fn(const std::string& port, uint32_t baudrate);
 void tx_thread_fn();
 void on_serial_write(const std_msgs::UInt8MultiArray::ConstPtr& msg);
+void on_tx_e3_payload(const std_msgs::UInt8MultiArray::ConstPtr& msg);
 void on_packet(uint8_t preamble, const uint8_t* frame, size_t length, uint16_t msg_type);
 void scheduleRSSI();
 
-RTCMParser parser({0xD3, 0xE3}, on_packet);
+RTCMParser parser;
 
+static size_t tx_buf_size() {
+  size_t buf_size = 0;
+  for(auto &p : g_tx_packet_buf) {
+    buf_size += p.size();
+  }
+  return buf_size;
+}
 
 // ── TX helper — enqueue bytes and wake tx_thread ───────────────────────────
-static void enqueue_tx(const uint8_t* data, size_t len) {
+static void enqueue_tx(const std::vector<uint8_t> packet) 
+{
   {
     std::lock_guard<std::mutex> lk(g_tx_mutex);
-    g_tx_buf.insert(g_tx_buf.end(), data, data + len);
-    if (g_tx_buf.size() > 5000) {
-      ROS_WARN_THROTTLE(5, "[radio] TX buffer growing large: %zu bytes", g_tx_buf.size());
+    g_tx_packet_buf.push_back(std::move(packet));
+    size_t buf_size = tx_buf_size();
+    if (buf_size > 1000) {
+      ROS_WARN_THROTTLE(5, "[radio] TX buffer growing large: %zu bytes", buf_size);
     }
   }
   g_tx_cv.notify_one();
 }
 
-// ── Packet callback (called from rx_thread) ────────────────────────────────
-//
+static void enqueue_tx(const uint8_t* data, size_t len) {
+    std::vector<uint8_t> packet(data, data + len);
+    enqueue_tx(packet);
+}
 
-// ROS1 Publisher::publish() is thread-safe, so we publish directly here
-// without bouncing through the main thread.
-void on_packet(uint8_t preamble, const uint8_t* frame, size_t length,uint16_t msg_type) {
+// ── E3 frame builder — wraps payload with preamble/length/sender/CRC ──────
+static void enqueue_e3_frame(const uint8_t* payload, size_t payload_len) {
+  std::vector<uint8_t> kv_bytes(payload, payload + payload_len);
+
+  std::vector<uint8_t> raw;
+  raw.push_back(0xE3);
+  uint16_t total_len = static_cast<uint16_t>(kv_bytes.size());
+  raw.push_back((total_len >> 8) & 0xFF);
+  raw.push_back(total_len & 0xFF);
+  raw.push_back((g_e3_sender_id >> 8) & 0xFF);
+  raw.push_back(g_e3_sender_id & 0xFF);
+  raw.insert(raw.end(), kv_bytes.begin(), kv_bytes.end());
+
+  uint32_t crc = e3::crc24q(raw.data(), raw.size());
+  raw.push_back((crc >> 16) & 0xFF);
+  raw.push_back((crc >> 8) & 0xFF);
+  raw.push_back(crc & 0xFF);
+
+  enqueue_tx(raw.data(), raw.size());
+}
+
+// ── Packet callback (called from rx_thread) ────────────────────────────────
+void on_packet(uint8_t preamble, const uint8_t* frame, size_t length, uint16_t msg_type) {
   if (preamble == RSSI_RESPONSE_PREAMBLE) {
     parser.await_e22_rssi(false);
     if(length!=5) {
@@ -118,47 +152,46 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length,uint16_t ms
     scheduleRSSI();
     return;
   }
-  if(preamble == 0xE3){
-    std_msgs::UInt8MultiArray msg;
-    msg.data.assign(frame, frame + length);
-    ROS_INFO("[radio] Radio CMD preamble=0x%02X type=%u len=%zu", preamble, msg_type, length);
-    g_cmd_pub.publish(msg);
+  if (preamble == 0xE3) {
+    // Debug: hex dump full E3 frame
+    {
+      std::string hex;
+      for (size_t i = 0; i < length; i++) {
+          char hb[4];
+          snprintf(hb, sizeof(hb), "%02X ", frame[i]);
+          hex += hb;
+      }
+      ROS_INFO("[radio] E3 RX: %s (%zu bytes)", hex.c_str(), length);
+    }
+
+    // Extract sender_id for logging, publish only payload bytes
+    if (length >= 8) {
+      uint16_t sender_id = (uint16_t(frame[3]) << 8) | frame[4];
+      uint16_t total_len = (uint16_t(frame[1]) << 8) | frame[2];
+      ROS_INFO("[radio] E3 payload sender=0x%04X kv_len=%u", sender_id, total_len);
+
+      std_msgs::UInt8MultiArray msg;
+      msg.data.assign(frame + 5, frame + 5 + total_len);
+      g_e3_payload_pub.publish(msg);
+    }
     scheduleRSSI();
     return;
   }
 }
 
-// ── RSSI poll timer (fires in 100ms after last packet received) ───
-void on_rssi_timer(const ros::TimerEvent&) {
-  if (!g_serial.isOpen()) {
-    ROS_WARN("[radio] RSSI poll skipped - port not open");
-    return;
-  }
-  if(!parser.is_idle()) {
-    ROS_WARN("[radio] RSSI poll skipped - parser is not idle");
+void scheduleRSSI() {
+  ros::Time now = ros::Time::now();
+  if((now - g_rssi_sent_at).toSec() < g_rssi_period) {
     return;
   }
 
-  // Warn if the previous request never got a response
-  if (parser.is_await_e22_rssi()) {
+  if(parser.is_await_e22_rssi()){
     ROS_WARN("[radio] RSSI response timeout (sent %.2f s ago)",
              (ros::Time::now() - g_rssi_sent_at).toSec());
-    parser.await_e22_rssi(false);
   }
-
-  parser.await_e22_rssi(true);
-  g_rssi_sent_at = ros::Time::now();
-  enqueue_tx(RSSI_CMD, sizeof(RSSI_CMD));
-  //ROS_INFO("[radio] RSSI query sent");
-}
-
-void scheduleRSSI() {
-  g_rssi_timer.stop();
-  if((ros::Time::now() - g_rssi_sent_at).toSec()<g_rssi_period) {
-    return;
-  }
-  g_rssi_timer.setPeriod(ros::Duration(RSSI_POLL_DELAY));
-  g_rssi_timer.start();
+  
+  g_rssi_sent_at = now;
+  enqueue_tx(RSSI_CMD_VEC);
 }
 
 // ── RX thread ──────────────────────────────────────────────────────────────
@@ -194,7 +227,7 @@ void rx_thread_fn(const std::string& port, uint32_t baudrate) {
       size_t n = g_serial.read(buf, READ_CHUNK);
       if (n > 0) {
         parser.feed(buf.data(), n);
-             
+
         buf.clear();
       }
       // n == 0 is a normal read timeout — loop and try again
@@ -219,30 +252,73 @@ void tx_thread_fn() {
 
     // Block until data is queued or we are asked to stop
     g_tx_cv.wait_for(lk, std::chrono::seconds(1),
-                     [] { return !g_tx_buf.empty() || g_stopped.load(); });
+                     [] { return !g_tx_packet_buf.empty() || g_stopped.load(); });
 
-    if (g_tx_buf.empty()) continue;
+
+    if (g_tx_packet_buf.empty()) continue;
 
     if (!g_serial.isOpen()) {
-      ROS_WARN_THROTTLE(5, "[radio] TX: serial port not open, dropping %zu bytes", g_tx_buf.size());
-      g_tx_buf.clear();
+      ROS_WARN_THROTTLE(5, "[radio] TX: serial port not open, dropping %zu packets", g_tx_packet_buf.size());
+      g_tx_packet_buf.clear();
       continue;
     }
 
-    // Snapshot and release the lock before the (potentially blocking) write
-    std::vector<uint8_t> to_write;
-    to_write.swap(g_tx_buf);
+    // Take first packet and release the lock before the (potentially blocking) write
+    std::vector<uint8_t> to_write = std::move(g_tx_packet_buf.front());
+    g_tx_packet_buf.pop_front();
     lk.unlock();
+
+    // Wait for parser to be idle max 2000ms before transmitting
+    uint32_t wait_time = 2000;
+    ros::Time wait_start = ros::Time::now();
+
+    while (!g_stopped && 
+      !(
+        parser.in_idle_ms() > g_rx_noactivity_timout_ms //no rx activity at all
+        || (parser.in_idle_ms() > g_rx_tx_delay_ms && parser.in_idle_ms() < (g_rx_tx_delay_ms + g_tx_window_ms)) //small window after rx activity
+      )
+      && wait_time > 0) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(5));
+      wait_time-=5;
+    }
+
+    if(parser.in_idle_ms() < g_rx_tx_delay_ms){
+      ROS_WARN("[radio] Parser states RX channel is still busy after 2000ms");
+    }
+
+    //set await rssi right before serial write
+    if(to_write == RSSI_CMD_VEC) {
+      //ROS_WARN("[radio] RSSI packet is going to radio");
+      parser.await_e22_rssi(true);
+    }
+
+    // Debug: hex dump E3 frame
+    {
+        std::string hex;
+        for (uint8_t b : to_write) {
+            char hb[4];
+            snprintf(hb, sizeof(hb), "%02X ", b);
+            hex += hb;
+        }
+        ROS_INFO("[radio] wait %dms, TX: %s (%zu bytes)", (int)(1000*(ros::Time::now() - wait_start).toSec()), hex.c_str(), to_write.size());
+    }
 
     try {
       size_t written = g_serial.write(to_write);
       if (written != to_write.size()) {
         ROS_WARN("[radio] TX: partial write - %zu of %zu bytes sent", written, to_write.size());
         // Re-queue the unsent tail
-        std::lock_guard<std::mutex> lk2(g_tx_mutex);
-        g_tx_buf.insert(g_tx_buf.begin(),
-                        to_write.begin() + written,
+        std::vector<uint8_t> unsent;
+        unsent.assign(to_write.begin() + written,
                         to_write.end());
+
+        std::lock_guard<std::mutex> lk2(g_tx_mutex);
+        g_tx_packet_buf.insert(g_tx_packet_buf.begin(), unsent);
+      } else {
+        //wait to flush the packet
+        //~200 bytes * 8 * 1000 / 19200 = 83ms
+        uint32_t wait_flush = written * 8 * 1000 / g_tx_air_baudrate;
+        std::this_thread::sleep_for(std::chrono::milliseconds(wait_flush));
       }
     }
     catch (const std::exception& e)
@@ -252,10 +328,16 @@ void tx_thread_fn() {
   }
 }
 
-// ── ROS subscriber callback — enqueue bytes for TX ────────────────────────
+// ── ROS subscriber callback — enqueue raw bytes for TX ─────────────────────
 void on_serial_write(const std_msgs::UInt8MultiArray::ConstPtr& msg) {
   if (msg->data.empty()) return;
   enqueue_tx(msg->data.data(), msg->data.size());
+}
+
+// ── ROS subscriber callback — build E3 frame from payload and enqueue ──────
+void on_tx_e3_payload(const std_msgs::UInt8MultiArray::ConstPtr& msg) {
+  if (msg->data.empty()) return;
+  enqueue_e3_frame(msg->data.data(), msg->data.size());
 }
 
 // ── main ───────────────────────────────────────────────────────────────────
@@ -266,32 +348,59 @@ int main(int argc, char** argv) {
 
   // ── Parameters ──────────────────────────────────────────────────────────
   const std::string port     = pnh.param("serial_port", std::string(""));
-  const uint32_t    baudrate = static_cast<uint32_t>(pnh.param("baudrate", 57600));
+  const uint32_t    baudrate = pnh.param("baudrate", 115200);
   g_rssi_period = pnh.param("rssi_poll_period", 5.0);   // seconds
+  
+  g_rx_noactivity_timout_ms = pnh.param("rx_noactivity_timout_ms", 2000); // milliseconds
+  //safe margin for 128 bytes packet = 75ms
+  //safe margin for 240 bytes packet = 125ms
+  g_rx_tx_delay_ms = pnh.param("rx_tx_delay_ms", 25); // milliseconds
+  g_tx_window_ms = pnh.param("tx_window_ms", 100); // milliseconds
+  g_tx_air_baudrate = pnh.param("tx_air_baudrate", 19200);
+
+  parser.init({0xD3, 0xE3}, on_packet);
 
   if (port.empty() || baudrate == 0) {
     ROS_FATAL("[radio] serial_port and baudrate must be set");
     return 1;
   }
 
+  // Derive E3 sender ID from robot_id param (first 4 hex chars of /etc/machine-id)
+  {
+    std::string robot_id = pnh.param("robot_id", std::string());
+    if (robot_id.size() >= 4) {
+      uint16_t sid;
+      if (sscanf(robot_id.c_str(), "%04hx", &sid) == 1) {
+        g_e3_sender_id = sid;
+      } else {
+        g_e3_sender_id = 0x0001;
+        ROS_WARN("[radio] Invalid robot_id '%s', defaulting E3 sender_id=0x0001", robot_id.c_str());
+      }
+    } else {
+      g_e3_sender_id = 0x0001;
+      ROS_WARN("[radio] robot_id not set, defaulting E3 sender_id=0x0001");
+    }
+  }
+
   // ── Publishers / subscribers ─────────────────────────────────────────────
-  g_rtcm_pub = pnh.advertise<rtcm_msgs::Message>("rtcm", 10);
-  g_cmd_pub  = pnh.advertise<std_msgs::UInt8MultiArray>("radio_cmd", 10);
-  g_rssi_pub = pnh.advertise<std_msgs::Float32>("rssi", 10);
+  g_rtcm_pub       = pnh.advertise<rtcm_msgs::Message>("rtcm", 10);
+  g_e3_payload_pub = pnh.advertise<std_msgs::UInt8MultiArray>("rx_e3_payload", 10);
+  g_rssi_pub       = pnh.advertise<std_msgs::Float32>("rssi", 10);
 
   ros::Subscriber write_sub = pnh.subscribe<std_msgs::UInt8MultiArray>(
       "radio_write", 10, on_serial_write,
       ros::TransportHints().tcpNoDelay(true));
 
-  // One shot timer for 100ms to request RSSI started after packet arrives
-  g_rssi_timer = nh.createTimer(ros::Duration(RSSI_POLL_DELAY), on_rssi_timer, true, false);
+  ros::Subscriber e3_payload_sub = pnh.subscribe<std_msgs::UInt8MultiArray>(
+      "tx_e3_payload", 10, on_tx_e3_payload,
+      ros::TransportHints().tcpNoDelay(true));
 
   // ── Start background threads ─────────────────────────────────────────────
   std::thread rx_thread(rx_thread_fn, port, baudrate);
   std::thread tx_thread(tx_thread_fn);
 
-  ROS_INFO("[radio] Started: port=%s baudrate=%u rssi_poll=%.1fs",
-           port.c_str(), baudrate, g_rssi_period);
+  ROS_INFO("[radio] Started: port=%s baudrate=%u e3_sender=0x%04X rssi_poll=%.1fs rx_tx_delay=%u tx_window=%u air_badurate=%u",
+           port.c_str(), baudrate, g_e3_sender_id, g_rssi_period, g_rx_tx_delay_ms, g_tx_window_ms, g_tx_air_baudrate);
 
   ros::spin();   // blocks here; handles write_sub callbacks on the main thread
 
