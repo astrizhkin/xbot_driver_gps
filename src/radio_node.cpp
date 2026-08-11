@@ -50,10 +50,9 @@ static std::atomic<bool>       g_stopped { false };
 // TX queue
 struct TxPacket {
     std::vector<uint8_t> data;
-    enum Mode { RSSI, IMMEDIATE, BATCHED } mode;
-    // RSSI      = raw E22 radio commands, transmit immediately (no RX quiet wait)
-    // IMMEDIATE = immediate E3 keys (<0x0400), transmit on RX quiet
-    // BATCHED   = batched E3 keys (>=0x0400), transmit during RTR window
+    enum Mode { RSSI, E3 } mode;
+    // RSSI = raw E22 radio commands, transmit immediately (no RX quiet wait)
+    // E3   = E3 frames, TX window depends on rtr_mode
 };
 
 static std::list<TxPacket>                g_tx_packet_buf;
@@ -87,7 +86,7 @@ static size_t tx_buf_size() {
 }
 
 // ── TX helper — enqueue bytes and wake tx_thread ───────────────────────────
-static void enqueue_tx(const std::vector<uint8_t> packet, TxPacket::Mode mode = TxPacket::IMMEDIATE)
+static void enqueue_tx(const std::vector<uint8_t> packet, TxPacket::Mode mode = TxPacket::E3)
 {
   {
     std::lock_guard<std::mutex> lk(g_tx_mutex);
@@ -100,7 +99,7 @@ static void enqueue_tx(const std::vector<uint8_t> packet, TxPacket::Mode mode = 
   g_tx_cv.notify_one();
 }
 
-static void enqueue_tx(const uint8_t* data, size_t len, TxPacket::Mode mode = TxPacket::IMMEDIATE) {
+static void enqueue_tx(const uint8_t* data, size_t len, TxPacket::Mode mode = TxPacket::E3) {
     std::vector<uint8_t> packet(data, data + len);
     enqueue_tx(packet, mode);
 }
@@ -108,13 +107,6 @@ static void enqueue_tx(const uint8_t* data, size_t len, TxPacket::Mode mode = Tx
 // ── E3 frame builder — wraps payload with preamble/length/sender/CRC ──────
 static void enqueue_e3_frame(const uint8_t* payload, size_t payload_len) {
   std::vector<uint8_t> kv_bytes(payload, payload + payload_len);
-
-  // Classify by first KV key (bytes 0-1 of payload, big-endian)
-  TxPacket::Mode mode = TxPacket::BATCHED;
-  if (payload_len >= 2) {
-    uint16_t first_key = (uint16_t(payload[0]) << 8) | payload[1];
-    mode = (first_key < 0x0400) ? TxPacket::IMMEDIATE : TxPacket::BATCHED;
-  }
 
   std::vector<uint8_t> raw;
   raw.push_back(0xE3);
@@ -130,7 +122,7 @@ static void enqueue_e3_frame(const uint8_t* payload, size_t payload_len) {
   raw.push_back((crc >> 8) & 0xFF);
   raw.push_back(crc & 0xFF);
 
-  enqueue_tx(raw, mode);
+  enqueue_tx(raw, TxPacket::E3);
 }
 
 // ── Packet callback (called from rx_thread) ────────────────────────────────
@@ -314,20 +306,6 @@ void tx_thread_fn() {
       continue;
     }
 
-    // ── Peek and gate BATCHED packets behind RTR window ────────────────
-    // Don't pop BATCHED packets when RTR is not open — rotate to back so
-    // RSSI/IMMEDIATE packets can pass through.
-    if (g_rtr_mode && g_tx_packet_buf.front().mode == TxPacket::BATCHED) {
-      if (!g_rtr_window_open.load() ||
-          (ros::Time::now() - g_rtr_window_open_at).toSec() >= 0.8) {
-        // RTR window not open or expired — rotate to back, try next packet
-        g_tx_packet_buf.push_back(std::move(g_tx_packet_buf.front()));
-        g_tx_packet_buf.pop_front();
-        lk.unlock();
-        continue;
-      }
-    }
-
     // Take first packet and release the lock before the (potentially blocking) write
     TxPacket pkt = std::move(g_tx_packet_buf.front());
     g_tx_packet_buf.pop_front();
@@ -341,13 +319,24 @@ void tx_thread_fn() {
         // RSSI queries always transmit immediately
         break;
 
-      case TxPacket::IMMEDIATE:
-        // Immediate keys wait for RX quiet (existing behavior)
-        wait_for_rx_quiet();
-        break;
-
-      case TxPacket::BATCHED:
-        // RTR window is open — no wait needed
+      case TxPacket::E3:
+        if (g_rtr_mode) {
+          // Wait for RTR window (within g_tx_window_ms of signal) OR pure RX silence
+          uint32_t wait_time = 2000;
+          while (!g_stopped && wait_time > 0) {
+            if (g_rtr_window_open.load()) {
+              double elapsed = (ros::Time::now() - g_rtr_window_open_at).toSec() * 1000.0;
+              if (elapsed < g_tx_window_ms)
+                break;
+            }
+            if (parser.in_idle_ms() > g_rx_noactivity_timout_ms)
+              break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            wait_time -= 5;
+          }
+        } else {
+          wait_for_rx_quiet();
+        }
         break;
     }
 
@@ -364,7 +353,7 @@ void tx_thread_fn() {
             snprintf(hb, sizeof(hb), "%02X ", b);
             hex += hb;
         }
-        const char* mode_str[] = { "RSSI", "IMMEDIATE", "BATCHED" };
+        const char* mode_str[] = { "RSSI", "E3" };
         ROS_INFO("[radio] wait %dms, TX[%s]: %s (%zu bytes)",
                  (int)(1000*(ros::Time::now() - wait_start).toSec()),
                  mode_str[static_cast<int>(pkt.mode)], hex.c_str(), pkt.data.size());
@@ -386,8 +375,8 @@ void tx_thread_fn() {
         uint32_t wait_flush = written * 8 * 1000 / g_tx_air_baudrate;
         std::this_thread::sleep_for(std::chrono::milliseconds(wait_flush));
 
-        // Reset RTR window after draining batched packets during it
-        if (pkt.mode == TxPacket::BATCHED && g_rtr_window_open.load()) {
+        // Reset RTR window after draining E3 packets during it
+        if (pkt.mode == TxPacket::E3 && g_rtr_window_open.load()) {
           g_rtr_window_open = false;
         }
       }
