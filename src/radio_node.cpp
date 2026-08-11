@@ -293,6 +293,22 @@ static bool wait_for_rx_quiet() {
   return true;
 }
 
+static bool is_rtr_window() {
+  bool rtr_ready = false;
+  //rtr window is open
+  if (g_rtr_window_open.load()) {
+    double elapsed = (ros::Time::now() - g_rtr_window_open_at).toSec() * 1000.0;
+    if (elapsed < g_tx_window_ms)
+      rtr_ready = true;
+  }
+
+  //or no any rx activity
+  if (parser.in_idle_ms() > g_rx_noactivity_timout_ms)
+    rtr_ready = true;
+
+  return rtr_ready;
+}
+
 void tx_thread_fn() {
   while (!g_stopped) {
     std::unique_lock<std::mutex> lk(g_tx_mutex);
@@ -312,14 +328,7 @@ void tx_thread_fn() {
     // ── Peek: if front is E3 and RTR mode is on, check if TX window is ready
     // If not, go back to waiting so RSSI packets can arrive and be processed.
     if (g_rtr_mode && g_tx_packet_buf.front().mode == TxPacket::E3) {
-      bool rtr_ready = false;
-      if (g_rtr_window_open.load()) {
-        double elapsed = (ros::Time::now() - g_rtr_window_open_at).toSec() * 1000.0;
-        if (elapsed < g_tx_window_ms)
-          rtr_ready = true;
-      }
-      if (parser.in_idle_ms() > g_rx_noactivity_timout_ms)
-        rtr_ready = true;
+      bool rtr_ready = is_rtr_window();
       if (!rtr_ready) {
         ROS_DEBUG("[radio] TX: E3 waiting for RTR window, sleeping until new packet or RTR");
         g_tx_cv.wait_for(lk, std::chrono::milliseconds(500));
@@ -343,16 +352,11 @@ void tx_thread_fn() {
 
       case TxPacket::E3:
         if (g_rtr_mode) {
-          // Wait for RTR window (within g_tx_window_ms of signal) OR pure RX silence
           uint32_t wait_time = 2000;
           while (!g_stopped && wait_time > 0) {
-            if (g_rtr_window_open.load()) {
-              double elapsed = (ros::Time::now() - g_rtr_window_open_at).toSec() * 1000.0;
-              if (elapsed < g_tx_window_ms)
-                break;
-            }
-            if (parser.in_idle_ms() > g_rx_noactivity_timout_ms)
+            if(is_rtr_window()){
               break;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
             wait_time -= 5;
           }
