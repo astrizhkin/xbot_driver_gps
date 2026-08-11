@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <list>
@@ -401,9 +402,16 @@ void tx_thread_fn() {
         uint32_t wait_flush = written * 8 * 1000 / g_tx_air_baudrate;
         std::this_thread::sleep_for(std::chrono::milliseconds(wait_flush));
 
-        // Reset RTR window after draining E3 packets during it
+        // Close RTR window only when no more E3 packets are queued
         if (pkt.mode == TxPacket::E3 && g_rtr_window_open.load()) {
-          g_rtr_window_open = false;
+          {
+            std::lock_guard<std::mutex> lk2(g_tx_mutex);
+            bool has_more_e3 = std::any_of(g_tx_packet_buf.begin(), g_tx_packet_buf.end(),
+              [](const TxPacket& p) { return p.mode == TxPacket::E3; });
+            if (!has_more_e3)
+              g_rtr_window_open = false;
+          }
+          g_tx_cv.notify_all();
         }
       }
     }
