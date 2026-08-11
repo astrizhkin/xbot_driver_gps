@@ -195,12 +195,12 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length, uint16_t m
       if (g_rtr_mode && cmd_type != 2 && cmd_type != 3) {
         g_rtr_window_open = true;
         g_rtr_window_open_at = ros::Time::now();
-        ROS_INFO("[radio] E3 RX first_key=0x%04X cmd=%s sender=0x%04X kv_len=%u -> RTR window open",
+        ROS_INFO("[radio] E3 RX first_key=0x%04X cmd=%s sender=0x%04X plen=%u -> RTR window open",
                  first_key, cmd_type == 0 ? "SET" : cmd_type == 1 ? "GET" : "UNK",
                  sender_id, total_len);
         g_tx_cv.notify_all();
       } else {
-        ROS_INFO("[radio] E3 RX first_key=0x%04X cmd=%s sender=0x%04X kv_len=%u",
+        ROS_INFO("[radio] E3 RX first_key=0x%04X cmd=%s sender=0x%04X plen=%u",
                  first_key, cmd_type == 2 ? "ACK" : cmd_type == 3 ? "NACK" : "UNK",
                  sender_id, total_len);
       }
