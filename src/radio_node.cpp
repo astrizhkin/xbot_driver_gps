@@ -321,9 +321,8 @@ void tx_thread_fn() {
 
       case TxPacket::E3:
         if (g_rtr_mode) {
-          // Wait for RTR window (within g_tx_window_ms of signal) OR pure RX silence
-          uint32_t wait_time = 2000;
-          while (!g_stopped && wait_time > 0) {
+          // Wait indefinitely for RTR window (within g_tx_window_ms of signal) OR pure RX silence
+          while (!g_stopped) {
             if (g_rtr_window_open.load()) {
               double elapsed = (ros::Time::now() - g_rtr_window_open_at).toSec() * 1000.0;
               if (elapsed < g_tx_window_ms)
@@ -332,7 +331,6 @@ void tx_thread_fn() {
             if (parser.in_idle_ms() > g_rx_noactivity_timout_ms)
               break;
             std::this_thread::sleep_for(std::chrono::milliseconds(5));
-            wait_time -= 5;
           }
         } else {
           wait_for_rx_quiet();
