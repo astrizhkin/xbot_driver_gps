@@ -174,6 +174,17 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length, uint16_t m
     return;
   }
   if (preamble == 0xE3) {
+    // Debug: hex dump full E3 frame                                                                                                             
+    //{                                                                                                                                     
+    //  std::string hex;                                                                                                                           
+    //  for (size_t i = 0; i < length; i++) {                                                                                               
+    //    char hb[4];                                                                                                                     
+    //    snprintf(hb, sizeof(hb), "%02X ", frame[i]);                                                                                    
+    //    hex += hb;                                                                                                                      
+    //  }                                                                                                                                   
+    //  ROS_INFO("[radio] E3 RX: %s (%zu bytes)", hex.c_str(), length);                                                                     
+    //}  
+
     if (length >= 8) {
       uint16_t sender_id = (uint16_t(frame[3]) << 8) | frame[4];
       uint16_t total_len = (uint16_t(frame[1]) << 8) | frame[2];
