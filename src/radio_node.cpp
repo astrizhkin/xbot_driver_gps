@@ -90,7 +90,10 @@ static void enqueue_tx(const std::vector<uint8_t> packet, TxPacket::Mode mode = 
 {
   {
     std::lock_guard<std::mutex> lk(g_tx_mutex);
-    g_tx_packet_buf.push_back({ std::move(packet), mode });
+    if (mode == TxPacket::RSSI)
+      g_tx_packet_buf.push_front({ std::move(packet), mode });
+    else
+      g_tx_packet_buf.push_back({ std::move(packet), mode });
     size_t buf_size = tx_buf_size();
     if (buf_size > 1000) {
       ROS_WARN_THROTTLE(5, "[radio] TX buffer growing large: %zu bytes", buf_size);
@@ -316,7 +319,8 @@ void tx_thread_fn() {
 
     switch (pkt.mode) {
       case TxPacket::RSSI:
-        // RSSI queries always transmit immediately
+        // RSSI queries wait for RX quiet before transmitting
+        wait_for_rx_quiet();
         break;
 
       case TxPacket::E3:
