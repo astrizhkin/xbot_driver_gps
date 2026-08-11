@@ -1,5 +1,6 @@
 #include <atomic>
 #include <condition_variable>
+#include <list>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -47,12 +48,25 @@ static serial::Serial          g_serial;
 static std::atomic<bool>       g_stopped { false };
 
 // TX queue
-static std::list<std::vector<uint8_t>>    g_tx_packet_buf;
-static std::mutex              g_tx_mutex;
-static std::condition_variable g_tx_cv;
+struct TxPacket {
+    std::vector<uint8_t> data;
+    enum Mode { RSSI, IMMEDIATE, BATCHED } mode;
+    // RSSI      = raw E22 radio commands, transmit immediately (no RX quiet wait)
+    // IMMEDIATE = immediate E3 keys (<0x0400), transmit on RX quiet
+    // BATCHED   = batched E3 keys (>=0x0400), transmit during RTR window
+};
+
+static std::list<TxPacket>                g_tx_packet_buf;
+static std::mutex                         g_tx_mutex;
+static std::condition_variable            g_tx_cv;
 
 // E3 sender ID (derived from ROBOT_ID env var)
 static uint16_t g_e3_sender_id { 0 };
+
+// RTR window — set by on_packet when RTR (key 0x0900) received from base station
+static std::atomic<bool>   g_rtr_window_open { false };
+static ros::Time          g_rtr_window_open_at;
+static bool               g_rtr_mode { true };  // configurable via param
 
 // ── Forward declarations ───────────────────────────────────────────────────
 void rx_thread_fn(const std::string& port, uint32_t baudrate);
@@ -67,17 +81,17 @@ RTCMParser parser;
 static size_t tx_buf_size() {
   size_t buf_size = 0;
   for(auto &p : g_tx_packet_buf) {
-    buf_size += p.size();
+    buf_size += p.data.size();
   }
   return buf_size;
 }
 
 // ── TX helper — enqueue bytes and wake tx_thread ───────────────────────────
-static void enqueue_tx(const std::vector<uint8_t> packet) 
+static void enqueue_tx(const std::vector<uint8_t> packet, TxPacket::Mode mode = TxPacket::IMMEDIATE)
 {
   {
     std::lock_guard<std::mutex> lk(g_tx_mutex);
-    g_tx_packet_buf.push_back(std::move(packet));
+    g_tx_packet_buf.push_back({ std::move(packet), mode });
     size_t buf_size = tx_buf_size();
     if (buf_size > 1000) {
       ROS_WARN_THROTTLE(5, "[radio] TX buffer growing large: %zu bytes", buf_size);
@@ -86,14 +100,21 @@ static void enqueue_tx(const std::vector<uint8_t> packet)
   g_tx_cv.notify_one();
 }
 
-static void enqueue_tx(const uint8_t* data, size_t len) {
+static void enqueue_tx(const uint8_t* data, size_t len, TxPacket::Mode mode = TxPacket::IMMEDIATE) {
     std::vector<uint8_t> packet(data, data + len);
-    enqueue_tx(packet);
+    enqueue_tx(packet, mode);
 }
 
 // ── E3 frame builder — wraps payload with preamble/length/sender/CRC ──────
 static void enqueue_e3_frame(const uint8_t* payload, size_t payload_len) {
   std::vector<uint8_t> kv_bytes(payload, payload + payload_len);
+
+  // Classify by first KV key (bytes 0-1 of payload, big-endian)
+  TxPacket::Mode mode = TxPacket::BATCHED;
+  if (payload_len >= 2) {
+    uint16_t first_key = (uint16_t(payload[0]) << 8) | payload[1];
+    mode = (first_key < 0x0400) ? TxPacket::IMMEDIATE : TxPacket::BATCHED;
+  }
 
   std::vector<uint8_t> raw;
   raw.push_back(0xE3);
@@ -109,7 +130,7 @@ static void enqueue_e3_frame(const uint8_t* payload, size_t payload_len) {
   raw.push_back((crc >> 8) & 0xFF);
   raw.push_back(crc & 0xFF);
 
-  enqueue_tx(raw.data(), raw.size());
+  enqueue_tx(raw, mode);
 }
 
 // ── Packet callback (called from rx_thread) ────────────────────────────────
@@ -164,6 +185,24 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length, uint16_t m
       ROS_INFO("[radio] E3 RX: %s (%zu bytes)", hex.c_str(), length);
     }
 
+    // Any non-ACK E3 from base station opens TX window for robot response.
+    // KV header starts at frame[5]: key(2) meta(1) — meta bits [7:6] = cmd_type
+    // cmd_type: SET=0, GET=1, ACK=2, NACK=3 — skip ACK/NACK
+    if (length >= 8 && g_rtr_mode) {
+      uint8_t meta = frame[7];
+      uint8_t cmd_type = (meta >> 6) & 0x03;
+      if (cmd_type != 2 && cmd_type != 3) {  // not ACK/NACK
+        if (!g_rtr_window_open.load()) {
+          g_rtr_window_open = true;
+          g_rtr_window_open_at = ros::Time::now();
+          uint16_t first_key = (uint16_t(frame[5]) << 8) | frame[6];
+          ROS_INFO("[radio] E3 RX key=0x%04X cmd=%s — TX window open", first_key,
+                   cmd_type == 0 ? "SET" : cmd_type == 1 ? "GET" : "UNK");
+          g_tx_cv.notify_all();
+        }
+      }
+    }
+
     // Extract sender_id for logging, publish only payload bytes
     if (length >= 8) {
       uint16_t sender_id = (uint16_t(frame[3]) << 8) | frame[4];
@@ -191,7 +230,7 @@ void scheduleRSSI() {
   }
   
   g_rssi_sent_at = now;
-  enqueue_tx(RSSI_CMD_VEC);
+  enqueue_tx(RSSI_CMD_VEC, TxPacket::RSSI);
 }
 
 // ── RX thread ──────────────────────────────────────────────────────────────
@@ -246,6 +285,23 @@ void rx_thread_fn(const std::string& port, uint32_t baudrate) {
 }
 
 // ── TX thread ──────────────────────────────────────────────────────────────
+static bool wait_for_rx_quiet() {
+  uint32_t wait_time = 2000;
+  while (!g_stopped &&
+    !(
+      parser.in_idle_ms() > g_rx_noactivity_timout_ms
+      || (parser.in_idle_ms() > g_rx_tx_delay_ms && parser.in_idle_ms() < (g_rx_tx_delay_ms + g_tx_window_ms))
+    )
+    && wait_time > 0) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    wait_time -= 5;
+  }
+  if (parser.in_idle_ms() < g_rx_tx_delay_ms) {
+    ROS_WARN("[radio] TX: RX channel still busy after 2000ms");
+  }
+  return true;
+}
+
 void tx_thread_fn() {
   while (!g_stopped) {
     std::unique_lock<std::mutex> lk(g_tx_mutex);
@@ -253,7 +309,6 @@ void tx_thread_fn() {
     // Block until data is queued or we are asked to stop
     g_tx_cv.wait_for(lk, std::chrono::seconds(1),
                      [] { return !g_tx_packet_buf.empty() || g_stopped.load(); });
-
 
     if (g_tx_packet_buf.empty()) continue;
 
@@ -264,61 +319,79 @@ void tx_thread_fn() {
     }
 
     // Take first packet and release the lock before the (potentially blocking) write
-    std::vector<uint8_t> to_write = std::move(g_tx_packet_buf.front());
+    TxPacket pkt = std::move(g_tx_packet_buf.front());
     g_tx_packet_buf.pop_front();
     lk.unlock();
 
-    // Wait for parser to be idle max 2000ms before transmitting
-    uint32_t wait_time = 2000;
+    // ── Wait for TX window based on packet mode ────────────────────────
     ros::Time wait_start = ros::Time::now();
 
-    while (!g_stopped && 
-      !(
-        parser.in_idle_ms() > g_rx_noactivity_timout_ms //no rx activity at all
-        || (parser.in_idle_ms() > g_rx_tx_delay_ms && parser.in_idle_ms() < (g_rx_tx_delay_ms + g_tx_window_ms)) //small window after rx activity
-      )
-      && wait_time > 0) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
-      wait_time-=5;
+    switch (pkt.mode) {
+      case TxPacket::RSSI:
+        // RSSI queries always transmit immediately
+        break;
+
+      case TxPacket::IMMEDIATE:
+        // Immediate keys wait for RX quiet (existing behavior)
+        wait_for_rx_quiet();
+        break;
+
+      case TxPacket::BATCHED:
+        if (g_rtr_mode && g_rtr_window_open.load()) {
+          double elapsed = (ros::Time::now() - g_rtr_window_open_at).toSec();
+          if (elapsed < 0.8) {
+            // RTR window open — skip RX quiet wait
+          } else {
+            // RTR window expired, fall through to RX quiet
+            g_rtr_window_open = false;
+            wait_for_rx_quiet();
+          }
+        } else {
+          // RTR mode disabled or no RTR received — fallback to RX quiet
+          wait_for_rx_quiet();
+        }
+        break;
     }
 
-    if(parser.in_idle_ms() < g_rx_tx_delay_ms){
-      ROS_WARN("[radio] Parser states RX channel is still busy after 2000ms");
-    }
-
-    //set await rssi right before serial write
-    if(to_write == RSSI_CMD_VEC) {
-      //ROS_WARN("[radio] RSSI packet is going to radio");
+    // set await rssi right before serial write
+    if (pkt.mode == TxPacket::RSSI) {
       parser.await_e22_rssi(true);
     }
 
-    // Debug: hex dump E3 frame
+    // Debug: hex dump
     {
         std::string hex;
-        for (uint8_t b : to_write) {
+        for (uint8_t b : pkt.data) {
             char hb[4];
             snprintf(hb, sizeof(hb), "%02X ", b);
             hex += hb;
         }
-        ROS_INFO("[radio] wait %dms, TX: %s (%zu bytes)", (int)(1000*(ros::Time::now() - wait_start).toSec()), hex.c_str(), to_write.size());
+        const char* mode_str[] = { "RSSI", "IMMEDIATE", "BATCHED" };
+        ROS_INFO("[radio] wait %dms, TX[%s]: %s (%zu bytes)",
+                 (int)(1000*(ros::Time::now() - wait_start).toSec()),
+                 mode_str[static_cast<int>(pkt.mode)], hex.c_str(), pkt.data.size());
     }
 
     try {
-      size_t written = g_serial.write(to_write);
-      if (written != to_write.size()) {
-        ROS_WARN("[radio] TX: partial write - %zu of %zu bytes sent", written, to_write.size());
+      size_t written = g_serial.write(pkt.data);
+      if (written != pkt.data.size()) {
+        ROS_WARN("[radio] TX: partial write - %zu of %zu bytes sent", written, pkt.data.size());
         // Re-queue the unsent tail
-        std::vector<uint8_t> unsent;
-        unsent.assign(to_write.begin() + written,
-                        to_write.end());
+        TxPacket unsent;
+        unsent.mode = pkt.mode;
+        unsent.data.assign(pkt.data.begin() + written, pkt.data.end());
 
         std::lock_guard<std::mutex> lk2(g_tx_mutex);
-        g_tx_packet_buf.insert(g_tx_packet_buf.begin(), unsent);
+        g_tx_packet_buf.insert(g_tx_packet_buf.begin(), std::move(unsent));
       } else {
-        //wait to flush the packet
-        //~200 bytes * 8 * 1000 / 19200 = 83ms
+        // wait to flush the packet
         uint32_t wait_flush = written * 8 * 1000 / g_tx_air_baudrate;
         std::this_thread::sleep_for(std::chrono::milliseconds(wait_flush));
+
+        // Reset RTR window after draining batched packets during it
+        if (pkt.mode == TxPacket::BATCHED && g_rtr_window_open.load()) {
+          g_rtr_window_open = false;
+        }
       }
     }
     catch (const std::exception& e)
@@ -357,6 +430,7 @@ int main(int argc, char** argv) {
   g_rx_tx_delay_ms = pnh.param("rx_tx_delay_ms", 25); // milliseconds
   g_tx_window_ms = pnh.param("tx_window_ms", 100); // milliseconds
   g_tx_air_baudrate = pnh.param("tx_air_baudrate", 19200);
+  g_rtr_mode = pnh.param("rtr_mode", true);
 
   parser.init({0xD3, 0xE3}, on_packet);
 
@@ -399,8 +473,8 @@ int main(int argc, char** argv) {
   std::thread rx_thread(rx_thread_fn, port, baudrate);
   std::thread tx_thread(tx_thread_fn);
 
-  ROS_INFO("[radio] Started: port=%s baudrate=%u e3_sender=0x%04X rssi_poll=%.1fs rx_tx_delay=%u tx_window=%u air_badurate=%u",
-           port.c_str(), baudrate, g_e3_sender_id, g_rssi_period, g_rx_tx_delay_ms, g_tx_window_ms, g_tx_air_baudrate);
+  ROS_INFO("[radio] Started: port=%s baudrate=%u e3_sender=0x%04X rssi_poll=%.1fs rx_tx_delay=%u tx_window=%u air_baudrate=%u rtr_mode=%d",
+           port.c_str(), baudrate, g_e3_sender_id, g_rssi_period, g_rx_tx_delay_ms, g_tx_window_ms, g_tx_air_baudrate, g_rtr_mode);
 
   ros::spin();   // blocks here; handles write_sub callbacks on the main thread
 
