@@ -174,38 +174,25 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length, uint16_t m
     return;
   }
   if (preamble == 0xE3) {
-    // Debug: hex dump full E3 frame
-    {
-      std::string hex;
-      for (size_t i = 0; i < length; i++) {
-          char hb[4];
-          snprintf(hb, sizeof(hb), "%02X ", frame[i]);
-          hex += hb;
-      }
-      ROS_INFO("[radio] E3 RX: %s (%zu bytes)", hex.c_str(), length);
-    }
-
-    // Any non-ACK E3 from base station opens TX window for robot response.
-    // KV header starts at frame[5]: key(2) meta(1) — meta bits [7:6] = cmd_type
-    // cmd_type: SET=0, GET=1, ACK=2, NACK=3 — skip ACK/NACK
-    if (length >= 8 && g_rtr_mode) {
-      uint8_t meta = frame[7];
-      uint8_t cmd_type = (meta >> 6) & 0x03;
-      if (cmd_type != 2 && cmd_type != 3) {  // not ACK/NACK
-        g_rtr_window_open = true;
-        g_rtr_window_open_at = ros::Time::now();
-        uint16_t first_key = (uint16_t(frame[5]) << 8) | frame[6];
-        ROS_INFO("[radio] E3 RX key=0x%04X cmd=%s -> TX window open", first_key,
-                 cmd_type == 0 ? "SET" : cmd_type == 1 ? "GET" : "UNK");
-        g_tx_cv.notify_all();
-      }
-    }
-
-    // Extract sender_id for logging, publish only payload bytes
     if (length >= 8) {
       uint16_t sender_id = (uint16_t(frame[3]) << 8) | frame[4];
       uint16_t total_len = (uint16_t(frame[1]) << 8) | frame[2];
-      ROS_INFO("[radio] E3 payload sender=0x%04X kv_len=%u", sender_id, total_len);
+      uint16_t first_key = (uint16_t(frame[5]) << 8) | frame[6];
+      uint8_t cmd_type = (frame[7] >> 6) & 0x03;
+
+      // Any non-ACK E3 from base station opens TX window for robot response.
+      if (g_rtr_mode && cmd_type != 2 && cmd_type != 3) {
+        g_rtr_window_open = true;
+        g_rtr_window_open_at = ros::Time::now();
+        ROS_INFO("[radio] E3 RX first_key=0x%04X cmd=%s sender=0x%04X kv_len=%u -> RTR window open",
+                 first_key, cmd_type == 0 ? "SET" : cmd_type == 1 ? "GET" : "UNK",
+                 sender_id, total_len);
+        g_tx_cv.notify_all();
+      } else {
+        ROS_INFO("[radio] E3 RX first_key=0x%04X cmd=%s sender=0x%04X kv_len=%u",
+                 first_key, cmd_type == 2 ? "ACK" : cmd_type == 3 ? "NACK" : "UNK",
+                 sender_id, total_len);
+      }
 
       std_msgs::UInt8MultiArray msg;
       msg.data.assign(frame + 5, frame + 5 + total_len);
