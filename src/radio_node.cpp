@@ -192,14 +192,12 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length, uint16_t m
       uint8_t meta = frame[7];
       uint8_t cmd_type = (meta >> 6) & 0x03;
       if (cmd_type != 2 && cmd_type != 3) {  // not ACK/NACK
-        if (!g_rtr_window_open.load()) {
-          g_rtr_window_open = true;
-          g_rtr_window_open_at = ros::Time::now();
-          uint16_t first_key = (uint16_t(frame[5]) << 8) | frame[6];
-          ROS_INFO("[radio] E3 RX key=0x%04X cmd=%s -> TX window open", first_key,
-                   cmd_type == 0 ? "SET" : cmd_type == 1 ? "GET" : "UNK");
-          g_tx_cv.notify_all();
-        }
+        g_rtr_window_open = true;
+        g_rtr_window_open_at = ros::Time::now();
+        uint16_t first_key = (uint16_t(frame[5]) << 8) | frame[6];
+        ROS_INFO("[radio] E3 RX key=0x%04X cmd=%s -> TX window open", first_key,
+                 cmd_type == 0 ? "SET" : cmd_type == 1 ? "GET" : "UNK");
+        g_tx_cv.notify_all();
       }
     }
 
@@ -318,6 +316,20 @@ void tx_thread_fn() {
       continue;
     }
 
+    // ── Peek and gate BATCHED packets behind RTR window ────────────────
+    // Don't pop BATCHED packets when RTR is not open — rotate to back so
+    // RSSI/IMMEDIATE packets can pass through.
+    if (g_rtr_mode && g_tx_packet_buf.front().mode == TxPacket::BATCHED) {
+      if (!g_rtr_window_open.load() ||
+          (ros::Time::now() - g_rtr_window_open_at).toSec() >= 0.8) {
+        // RTR window not open or expired — rotate to back, try next packet
+        g_tx_packet_buf.push_back(std::move(g_tx_packet_buf.front()));
+        g_tx_packet_buf.pop_front();
+        lk.unlock();
+        continue;
+      }
+    }
+
     // Take first packet and release the lock before the (potentially blocking) write
     TxPacket pkt = std::move(g_tx_packet_buf.front());
     g_tx_packet_buf.pop_front();
@@ -337,25 +349,7 @@ void tx_thread_fn() {
         break;
 
       case TxPacket::BATCHED:
-        if (g_rtr_mode) {
-          // Wait for RTR window — no RX quiet fallback
-          while (!g_stopped && !g_rtr_window_open.load()) {
-            g_tx_cv.wait_for(lk, std::chrono::milliseconds(500));
-          }
-          // Re-acquire lock after wait to re-queue if window expired
-          lk.lock();
-          double elapsed = (ros::Time::now() - g_rtr_window_open_at).toSec();
-          if (elapsed >= 0.8) {
-            // Window expired while we were waiting — put packet back, try again
-            g_tx_packet_buf.push_front(std::move(pkt));
-            lk.unlock();
-            continue;
-          }
-          lk.lock();
-        } else {
-          // RTR mode disabled — fallback to RX quiet
-          wait_for_rx_quiet();
-        }
+        // RTR window is open — no wait needed
         break;
     }
 
