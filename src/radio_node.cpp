@@ -63,8 +63,7 @@ static std::condition_variable            g_tx_cv;
 // E3 sender ID (derived from ROBOT_ID env var)
 static uint16_t g_e3_sender_id { 0 };
 
-// RTR window — set by on_packet when RTR (key 0x0900) received from base station
-static std::atomic<bool>   g_rtr_window_open { false };
+// RTR window — g_rtr_window_open_at set by on_packet when RTR (key 0x0900) received
 static ros::Time          g_rtr_window_open_at;
 static bool               g_rtr_mode { true };  // configurable via param
 
@@ -189,7 +188,6 @@ void on_packet(uint8_t preamble, const uint8_t* frame, size_t length, uint16_t m
 
       // Any non-ACK E3 from base station opens TX window for robot response.
       if (g_rtr_mode && cmd_type != 2 && cmd_type != 3) {
-        g_rtr_window_open = true;
         g_rtr_window_open_at = ros::Time::now();
         ROS_INFO("[radio] E3 RX first_key=0x%04X cmd=%s sender=0x%04X plen=%u -> RTR window open",
                  first_key, cmd_type == 0 ? "SET" : cmd_type == 1 ? "GET" : "UNK",
@@ -295,19 +293,18 @@ static bool wait_for_rx_quiet() {
 }
 
 static bool is_rtr_window() {
-  bool rtr_ready = false;
-  //rtr window is open
-  if (g_rtr_window_open.load()) {
+  // RTR window: g_tx_window_ms after last E3 RX or E3 TX
+  if (!g_rtr_window_open_at.isZero()) {
     double elapsed = (ros::Time::now() - g_rtr_window_open_at).toSec() * 1000.0;
     if (elapsed < g_tx_window_ms)
-      rtr_ready = true;
+      return true;
   }
 
-  //or no any rx activity
+  // Fallback: RX idle for full timeout
   if (parser.in_idle_ms() > g_rx_noactivity_timout_ms)
-    rtr_ready = true;
+    return true;
 
-  return rtr_ready;
+  return false;
 }
 
 void tx_thread_fn() {
@@ -402,15 +399,9 @@ void tx_thread_fn() {
         uint32_t wait_flush = written * 8 * 1000 / g_tx_air_baudrate;
         std::this_thread::sleep_for(std::chrono::milliseconds(wait_flush));
 
-        // Close RTR window only when no more E3 packets are queued
-        if (pkt.mode == TxPacket::E3 && g_rtr_window_open.load()) {
-          {
-            std::lock_guard<std::mutex> lk2(g_tx_mutex);
-            bool has_more_e3 = std::any_of(g_tx_packet_buf.begin(), g_tx_packet_buf.end(),
-              [](const TxPacket& p) { return p.mode == TxPacket::E3; });
-            if (!has_more_e3)
-              g_rtr_window_open = false;
-          }
+        // Extend RTR window on successful E3 TX
+        if (pkt.mode == TxPacket::E3) {
+          g_rtr_window_open_at = ros::Time::now();
           g_tx_cv.notify_all();
         }
       }
