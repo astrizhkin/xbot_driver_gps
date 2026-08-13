@@ -14,6 +14,7 @@ find_package(catkin REQUIRED COMPONENTS
         rosgraph_msgs
         message_generation
         e3_lib
+        rtcm_msgs
         )
 
 add_service_files(

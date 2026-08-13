@@ -16,8 +16,10 @@
 #include "std_msgs/UInt32.h"
 #include "sensor_msgs/Imu.h"
 #include "rtcm_msgs/Message.h"
+#include "xbot_msgs/GNSSInfo.h"
 #include <nmeaparse/nmea.h>
 #include "GeographicLib/DMS.hpp"
+#include "GeographicLib/Geocentric.hpp"
 #include <boost/algorithm/string.hpp>
 #include "nmea_msgs/Sentence.h"
 #include <boost/date_time/posix_time/posix_time.hpp>
@@ -55,6 +57,94 @@ static std::map<std::string, ros::Time> g_rtcm_last_stamp;
 ros::Time g_last_rtcm(0.0);
 
 uint8_t radio_log_levels = 0;
+
+ros::Publisher gnss_info_pub;
+
+struct RtcM1005State {
+    bool     valid       = false;
+    uint32_t station_id  = 0;
+    double   base_lat    = 0.0;
+    double   base_lon    = 0.0;
+    double   base_height = 0.0;
+} g_rtcm1005;
+
+// ── Bit-level RTCM 1005 parser ──────────────────────────────────────────────
+static void parse_rtcm1005(const rtcm_msgs::Message& rtcm) {
+    const std::vector<uint8_t>& data = rtcm.message;
+    if (data.size() < 6)
+        return;
+
+    // RTCM3 frame: preamble(1) + length(2) + payload(N) + crc(3)
+    // Payload starts at byte offset 3.
+    const uint8_t* p = data.data() + 3;
+
+    // Message type: first 12 bits of payload
+    uint16_t msg_type = (static_cast<uint16_t>(p[0]) << 4) | ((p[1] >> 4) & 0x0Fu);
+    if (msg_type != 1005)
+        return;
+
+    // Bit reader over the payload bytes, starting at bit 12 (after msg_type).
+    size_t payload_sz = data.size() - 3;
+    int bit_pos = 12;
+    auto read_bits = [&](int nbits) -> uint32_t {
+        uint32_t val = 0;
+        for (int i = 0; i < nbits; i++) {
+            int byte_idx = bit_pos / 8;
+            int bit_idx  = 7 - (bit_pos % 8);
+            if (byte_idx < static_cast<int>(payload_sz))
+                val = (val << 1) | ((p[byte_idx] >> bit_idx) & 1u);
+            bit_pos++;
+        }
+        return val;
+    };
+
+    // Reference station ID (20 bits)
+    uint32_t station_id = read_bits(20);
+
+    // L1 phase range (32 bits) – skip
+    read_bits(32);
+    // L2 phase range (32 bits) – skip
+    read_bits(32);
+    // DGNSS/RTK indicator (1 bit) – skip
+    read_bits(1);
+    // Survey mode (1 bit) – skip
+    read_bits(1);
+    // Age of survey (16 bits) – skip
+    read_bits(16);
+    // Number of survey-in epochs (16 bits) – skip
+    read_bits(16);
+    // Average N mm (16 bits) – skip
+    read_bits(16);
+    // Average E mm (16 bits) – skip
+    read_bits(16);
+    // Average D mm (16 bits) – skip
+    read_bits(16);
+    // Antenna manufacturer (128 bits) – skip
+    read_bits(128);
+    // Antenna type (128 bits) – skip
+    read_bits(128);
+
+    // ARP coordinates: ECEF X/Y/Z (32-bit signed, 1 mm resolution)
+    int32_t arp_x_mm = static_cast<int32_t>(read_bits(32));
+    int32_t arp_y_mm = static_cast<int32_t>(read_bits(32));
+    int32_t arp_z_mm = static_cast<int32_t>(read_bits(32));
+
+    double xp = arp_x_mm / 1000.0;  // mm → m
+    double yp = arp_y_mm / 1000.0;
+    double zp = arp_z_mm / 1000.0;
+
+    // ECEF → WGS84 lat/lon/height
+    GeographicLib::Geocentric earth(
+        GeographicLib::WGS84::a(), GeographicLib::WGS84::f());
+    double lat = 0, lon = 0, height = 0;
+    earth.Reverse(xp, yp, zp, lat, lon, height);
+
+    g_rtcm1005.valid     = true;
+    g_rtcm1005.station_id = station_id;
+    g_rtcm1005.base_lat   = lat;
+    g_rtcm1005.base_lon   = lon;
+    g_rtcm1005.base_height = height;
+}
 
 void generate_nmea(double lat_in, double lon_in) {
     // only send every 10 seconds, this will be more than needed
@@ -128,6 +218,7 @@ void gps_log(std::string text, LogLevel level) {
 void rtcm_received(const rtcm_msgs::Message::ConstPtr &rtcm) {
     g_last_rtcm = rtcm->header.stamp;
     g_rtcm_last_stamp[rtcm->header.frame_id] = rtcm->header.stamp;
+    parse_rtcm1005(*rtcm);
     gpsInterface->send_rtcm(rtcm->message.data(), rtcm->message.size());
 }
 
@@ -219,6 +310,28 @@ void gps_state_received(const GpsInterface::GpsState &state) {
         rtcm_age,state.diff_age);
     // send feedback to VRS
     generate_nmea(state.pos_lat, state.pos_lon);
+
+    // --- Publish GNSSInfo ---
+    static xbot_msgs::GNSSInfo gnss_info;
+    gnss_info.header.seq++;
+    gnss_info.header.frame_id = "gps";
+    gnss_info.header.stamp = ros::Time::now();
+
+    gnss_info.has_rtcm1005  = g_rtcm1005.valid;
+    gnss_info.base_station_id = g_rtcm1005.station_id;
+    gnss_info.base_lat      = g_rtcm1005.base_lat;
+    gnss_info.base_lon      = g_rtcm1005.base_lon;
+    gnss_info.base_height   = g_rtcm1005.base_height;
+
+    gnss_info.used_satellites     = state.pubx_used_satelites;
+    gnss_info.tracking_satellites = state.pubx_tracking_satelites;
+    gnss_info.avg_used_snr        = state.pubx_average_used_snr;
+    gnss_info.avg_tracking_snr    = state.pubx_average_tracking_snr;
+
+    gnss_info.rtcm_age_sec  = (ros::Time::now() - g_last_rtcm).toSec();
+    gnss_info.dgnss_age_sec = state.diff_age;
+
+    gnss_info_pub.publish(gnss_info);
 }
 
 void wheel_latency_received(uint32_t wheel_tick_stamp, uint32_t wheel_tick_stamp_ublox,
@@ -365,6 +478,7 @@ int main(int argc, char **argv) {
     pose_pub = paramNh.advertise<geometry_msgs::PoseWithCovariance>("pose", 10);
     xbot_pose_pub = paramNh.advertise<xbot_msgs::AbsolutePose>("xb_pose", 10);
     imu_pub = paramNh.advertise<sensor_msgs::Imu>("imu", 10);
+    gnss_info_pub = paramNh.advertise<xbot_msgs::GNSSInfo>("gnss_info", 10);
 
     ros::ServiceServer set_datum_srv = paramNh.advertiseService("set_datum", setDatum);
 
