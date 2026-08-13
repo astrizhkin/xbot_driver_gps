@@ -20,6 +20,7 @@
 #include <nmeaparse/nmea.h>
 #include "GeographicLib/DMS.hpp"
 #include "GeographicLib/Geocentric.hpp"
+#include "GeographicLib/Constants.hpp"
 #include <boost/algorithm/string.hpp>
 #include "nmea_msgs/Sentence.h"
 #include <boost/date_time/posix_time/posix_time.hpp>
@@ -135,7 +136,7 @@ static void parse_rtcm1005(const rtcm_msgs::Message& rtcm) {
 
     // ECEF → WGS84 lat/lon/height
     GeographicLib::Geocentric earth(
-        GeographicLib::WGS84::a(), GeographicLib::WGS84::f());
+        GeographicLib::Constants::WGS84_a(), GeographicLib::Constants::WGS84_f());
     double lat = 0, lon = 0, height = 0;
     earth.Reverse(xp, yp, zp, lat, lon, height);
 
@@ -319,9 +320,9 @@ void gps_state_received(const GpsInterface::GpsState &state) {
 
     gnss_info.has_rtcm1005  = g_rtcm1005.valid;
     gnss_info.base_station_id = g_rtcm1005.station_id;
-    gnss_info.base_lat      = g_rtcm1005.base_lat;
-    gnss_info.base_lon      = g_rtcm1005.base_lon;
-    gnss_info.base_height   = g_rtcm1005.base_height;
+    gnss_info.base_lat_deg  = g_rtcm1005.base_lat;
+    gnss_info.base_lon_deg  = g_rtcm1005.base_lon;
+    gnss_info.base_height_m = g_rtcm1005.base_height;
 
     gnss_info.used_satellites     = state.pubx_used_satelites;
     gnss_info.tracking_satellites = state.pubx_tracking_satelites;
