@@ -62,11 +62,11 @@ uint8_t radio_log_levels = 0;
 ros::Publisher gnss_info_pub;
 
 struct RtcM1005State {
-    bool     valid       = false;
-    uint32_t station_id  = 0;
-    double   base_lat    = 0.0;
-    double   base_lon    = 0.0;
-    double   base_height = 0.0;
+    uint32_t  station_id  = 0;
+    double    base_lat    = 0.0;
+    double    base_lon    = 0.0;
+    double    base_height = 0.0;
+    ros::Time received_at;
 } g_rtcm1005;
 
 // ── RTCM 1005 parser (RTCM 3.2/3.3 Stationary ARP) ─────────────────────────
@@ -138,13 +138,13 @@ static void parse_rtcm1005(const rtcm_msgs::Message& rtcm) {
     double lat = 0, lon = 0, height = 0;
     earth.Reverse(xp, yp, zp, lat, lon, height);
 
-    ROS_INFO_THROTTLE(30, "[driver_gps] RTCM 1005 ECEF X=%.1f Y=%.1f Z=%.1f m, station=%u → lat=%.6f lon=%.6f h=%.1f",
+    ROS_INFO_THROTTLE(30, "[driver_gps] RTCM 1005 ECEF X=%.1f Y=%.1f Z=%.1f m, station=%u -> lat=%.6f lon=%.6f h=%.1f",
                       xp, yp, zp, station_id, lat, lon, height);
 
-    g_rtcm1005.valid     = true;
-    g_rtcm1005.station_id = station_id;
-    g_rtcm1005.base_lat   = lat;
-    g_rtcm1005.base_lon   = lon;
+    g_rtcm1005.received_at = ros::Time::now();
+    g_rtcm1005.station_id  = station_id;
+    g_rtcm1005.base_lat    = lat;
+    g_rtcm1005.base_lon    = lon;
     g_rtcm1005.base_height = height;
 }
 
@@ -319,7 +319,9 @@ void gps_state_received(const GpsInterface::GpsState &state) {
     gnss_info.header.frame_id = "gps";
     gnss_info.header.stamp = ros::Time::now();
 
-    gnss_info.has_rtcm1005  = g_rtcm1005.valid;
+    gnss_info.rtcm1005_age_sec = !g_rtcm1005.received_at.isZero()
+        ? (ros::Time::now() - g_rtcm1005.received_at).toSec()
+        : 0.0;
     gnss_info.base_station_id = g_rtcm1005.station_id;
     gnss_info.base_lat_deg  = g_rtcm1005.base_lat;
     gnss_info.base_lon_deg  = g_rtcm1005.base_lon;
