@@ -134,8 +134,7 @@ static void parse_rtcm1005(const rtcm_msgs::Message& rtcm) {
     double zp = arp_z * 0.0001;
 
     // ECEF → WGS84 lat/lon/height
-    GeographicLib::Geocentric earth(
-        GeographicLib::Constants::WGS84_a(), GeographicLib::Constants::WGS84_f());
+    const Geocentric& earth = Geocentric::WGS84;
     double lat = 0, lon = 0, height = 0;
     earth.Reverse(xp, yp, zp, lat, lon, height);
 
