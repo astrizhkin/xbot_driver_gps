@@ -69,26 +69,34 @@ struct RtcM1005State {
     double   base_height = 0.0;
 } g_rtcm1005;
 
-// ── Bit-level RTCM 1005 parser ──────────────────────────────────────────────
+// ── RTCM 1005 parser (RTCM 3.2/3.3 Stationary ARP) ─────────────────────────
+// Payload layout (bits, after 12-bit message type):
+//   12 bits  Station ID
+//   6  bits  ITRF realisation year
+//   4  bits  (reserved)
+//   38 bits  Antenna Ref X  (ECEF, signed, 0.0001 m)
+//   2  bits  (reserved)
+//   38 bits  Antenna Ref Y  (ECEF, signed, 0.0001 m)
+//   2  bits  (reserved)
+//   38 bits  Antenna Ref Z  (ECEF, signed, 0.0001 m)
+// Total: 12 + 152 = 164 bits = 20.5 bytes (frame payload = 23 bytes with crc)
 static void parse_rtcm1005(const rtcm_msgs::Message& rtcm) {
     const std::vector<uint8_t>& data = rtcm.message;
     if (data.size() < 6)
         return;
 
-    // RTCM3 frame: preamble(1) + length(2) + payload(N) + crc(3)
-    // Payload starts at byte offset 3.
-    const uint8_t* p = data.data() + 3;
+    const uint8_t* p = data.data() + 3;  // skip preamble + length bytes
 
     // Message type: first 12 bits of payload
     uint16_t msg_type = (static_cast<uint16_t>(p[0]) << 4) | ((p[1] >> 4) & 0x0Fu);
     if (msg_type != 1005)
         return;
 
-    // Bit reader over the payload bytes, starting at bit 12 (after msg_type).
+    // Bit reader over payload bytes, starting at bit 12.
     size_t payload_sz = data.size() - 3;
     int bit_pos = 12;
-    auto read_bits = [&](int nbits) -> uint32_t {
-        uint32_t val = 0;
+    auto read_bits = [&](int nbits) -> uint64_t {
+        uint64_t val = 0;
         for (int i = 0; i < nbits; i++) {
             int byte_idx = bit_pos / 8;
             int bit_idx  = 7 - (bit_pos % 8);
@@ -99,46 +107,40 @@ static void parse_rtcm1005(const rtcm_msgs::Message& rtcm) {
         return val;
     };
 
-    // Reference station ID (20 bits)
-    uint32_t station_id = read_bits(20);
+    // Station ID (12 bits)
+    uint32_t station_id = static_cast<uint32_t>(read_bits(12));
 
-    // L1 phase range (32 bits) – skip
-    read_bits(32);
-    // L2 phase range (32 bits) – skip
-    read_bits(32);
-    // DGNSS/RTK indicator (1 bit) – skip
-    read_bits(1);
-    // Survey mode (1 bit) – skip
-    read_bits(1);
-    // Age of survey (16 bits) – skip
-    read_bits(16);
-    // Number of survey-in epochs (16 bits) – skip
-    read_bits(16);
-    // Average N mm (16 bits) – skip
-    read_bits(16);
-    // Average E mm (16 bits) – skip
-    read_bits(16);
-    // Average D mm (16 bits) – skip
-    read_bits(16);
-    // Antenna manufacturer (128 bits) – skip
-    read_bits(128);
-    // Antenna type (128 bits) – skip
-    read_bits(128);
+    // ITRF realisation year (6 bits) – skip
+    read_bits(6);
 
-    // ARP coordinates: ECEF X/Y/Z (32-bit signed, 1 mm resolution)
-    int32_t arp_x_mm = static_cast<int32_t>(read_bits(32));
-    int32_t arp_y_mm = static_cast<int32_t>(read_bits(32));
-    int32_t arp_z_mm = static_cast<int32_t>(read_bits(32));
+    // Reserved (4 bits) – skip
+    read_bits(4);
 
-    double xp = arp_x_mm / 1000.0;  // mm → m
-    double yp = arp_y_mm / 1000.0;
-    double zp = arp_z_mm / 1000.0;
+    // Antenna Ref X/Y/Z (38-bit signed, 0.0001 m resolution)
+    int64_t arp_x = static_cast<int64_t>(read_bits(38));
+    read_bits(2);  // reserved
+    int64_t arp_y = static_cast<int64_t>(read_bits(38));
+    read_bits(2);  // reserved
+    int64_t arp_z = static_cast<int64_t>(read_bits(38));
+
+    // 38-bit sign extend: if bit 37 is set, sign-extend to int64
+    uint64_t sign_bit = 1ULL << 37;
+    if (arp_x & sign_bit) arp_x |= ~0ULL << 38;
+    if (arp_y & sign_bit) arp_y |= ~0ULL << 38;
+    if (arp_z & sign_bit) arp_z |= ~0ULL << 38;
+
+    double xp = arp_x * 0.0001;  // → metres
+    double yp = arp_y * 0.0001;
+    double zp = arp_z * 0.0001;
 
     // ECEF → WGS84 lat/lon/height
     GeographicLib::Geocentric earth(
         GeographicLib::Constants::WGS84_a(), GeographicLib::Constants::WGS84_f());
     double lat = 0, lon = 0, height = 0;
     earth.Reverse(xp, yp, zp, lat, lon, height);
+
+    ROS_INFO_THROTTLE(30, "[driver_gps] RTCM 1005 ECEF X=%.1f Y=%.1f Z=%.1f m, station=%u → lat=%.6f lon=%.6f h=%.1f",
+                      xp, yp, zp, station_id, lat, lon, height);
 
     g_rtcm1005.valid     = true;
     g_rtcm1005.station_id = station_id;
